@@ -1,0 +1,1089 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { Invoice, CustomerStat, CompanySettings, RevenueTarget, Customer } from '../types';
+import { 
+  getMonthKey, 
+  formatCurrency, 
+  getQuarterKey, 
+  getYearKey, 
+  getQuarterMonths, 
+  parseQuarterKey,
+  getAvailableQuarters,
+  getAvailableYears,
+  calculateGrowthRate,
+  formatGrowthRate
+} from '../utils/helpers';
+import { Calendar, DollarSign, TrendingUp, FileText, BarChart3, PieChart, ChevronDown, ChevronLeft, Lightbulb, Sparkles, Award, ArrowRight } from 'lucide-react';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement } from 'chart.js';
+import { Bar, Line, Pie } from 'react-chartjs-2';
+
+// Register Chart.js components
+try {
+  ChartJS.register(
+    CategoryScale,
+    LinearScale,
+    BarElement,
+    LineElement,
+    PointElement,
+    Title,
+    Tooltip,
+    Legend,
+    ArcElement
+  );
+} catch (e) {
+  console.debug('Chart.js already registered');
+}
+
+interface ReportsProps {
+  invoices: Invoice[];
+  companySettings?: CompanySettings;
+  revenueTargets?: RevenueTarget[];
+  customers?: Customer[];
+  onBack?: () => void;
+}
+
+type ReportType = 'month' | 'quarter' | 'year';
+
+const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTargets = [], customers = [], onBack }) => {
+  const [reportType, setReportType] = useState<ReportType>('month');
+  const [selectedMonth, setSelectedMonth] = useState<string>(getMonthKey(new Date().toISOString()));
+  const [selectedQuarter, setSelectedQuarter] = useState<string>('');
+  const [selectedYear, setSelectedYear] = useState<string>('');
+  const [selectedCustomerForChart, setSelectedCustomerForChart] = useState<string>('');
+
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    invoices.forEach(inv => months.add(getMonthKey(inv.date)));
+    months.add(getMonthKey(new Date().toISOString()));
+    return Array.from(months).sort().reverse();
+  }, [invoices]);
+
+  const availableQuarters = useMemo(() => getAvailableQuarters(invoices), [invoices]);
+  const availableYears = useMemo(() => getAvailableYears(invoices), [invoices]);
+
+  useEffect(() => {
+    if (availableQuarters.length > 0 && !selectedQuarter) {
+      const currentQuarter = getQuarterKey(new Date().toISOString());
+      setSelectedQuarter(availableQuarters.includes(currentQuarter) ? currentQuarter : availableQuarters[0]);
+    }
+    if (availableYears.length > 0 && !selectedYear) {
+      const currentYear = getYearKey(new Date().toISOString());
+      setSelectedYear(availableYears.includes(currentYear) ? currentYear : availableYears[0]);
+    }
+  }, [availableQuarters, availableYears, selectedQuarter, selectedYear]);
+
+  useEffect(() => {
+    if (reportType === 'month') {
+      setSelectedCustomerForChart('');
+    }
+  }, [reportType, selectedQuarter, selectedYear]);
+
+  const filteredInvoices = useMemo(() => {
+    switch (reportType) {
+      case 'month':
+        return invoices.filter(inv => getMonthKey(inv.date) === selectedMonth);
+      case 'quarter':
+        if (!selectedQuarter) return [];
+        const { year, quarter } = parseQuarterKey(selectedQuarter);
+        const quarterMonths = getQuarterMonths(quarter, year);
+        return invoices.filter(inv => quarterMonths.includes(getMonthKey(inv.date)));
+      case 'year':
+        if (!selectedYear) return [];
+        return invoices.filter(inv => getYearKey(inv.date) === selectedYear);
+      default:
+        return invoices.filter(inv => getMonthKey(inv.date) === selectedMonth);
+    }
+  }, [invoices, reportType, selectedMonth, selectedQuarter, selectedYear]);
+
+  const customerStats = useMemo(() => {
+    const stats: Record<string, CustomerStat> = {};
+    filteredInvoices.forEach(inv => {
+      const name = inv.customerName || 'Unknown Customer';
+      if (!stats[name]) {
+        stats[name] = { 
+          name, totalAmount: 0, invoiceCount: 0, invoices: [],
+          latestAddress: inv.customerAddress, latestPhone: inv.customerPhone
+        };
+      }
+      stats[name].totalAmount += inv.totalAmount;
+      stats[name].invoiceCount += 1;
+      stats[name].invoices.push(inv);
+    });
+    return Object.values(stats).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredInvoices]);
+
+  const totalRevenue = filteredInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+
+  const customerRevenueDistribution = useMemo(() => {
+    if (!customerStats || customerStats.length === 0) return null;
+    if (totalRevenue === 0) return null;
+    
+    return customerStats.map(cust => ({
+      name: cust.name,
+      revenue: cust.totalAmount,
+      percentage: (cust.totalAmount / totalRevenue) * 100
+    })).sort((a, b) => b.revenue - a.revenue);
+  }, [customerStats, totalRevenue]);
+
+  const growthRateData = useMemo(() => {
+    if (reportType === 'quarter' && selectedQuarter) {
+      const { year, quarter } = parseQuarterKey(selectedQuarter);
+      const currentQuarterMonths = getQuarterMonths(quarter, year);
+      const currentQuarterTotal = invoices
+        .filter(inv => currentQuarterMonths.includes(getMonthKey(inv.date)))
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+      
+      let prevQuarter: number, prevYear: number;
+      if (quarter === 1) {
+        prevQuarter = 4;
+        prevYear = year - 1;
+      } else {
+        prevQuarter = quarter - 1;
+        prevYear = year;
+      }
+      const prevQuarterMonths = getQuarterMonths(prevQuarter, prevYear);
+      const prevQuarterTotal = invoices
+        .filter(inv => prevQuarterMonths.includes(getMonthKey(inv.date)))
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+      
+      return {
+        current: currentQuarterTotal,
+        previous: prevQuarterTotal,
+        rate: calculateGrowthRate(currentQuarterTotal, prevQuarterTotal)
+      };
+    }
+    
+    if (reportType === 'year' && selectedYear) {
+      const currentYear = parseInt(selectedYear, 10);
+      const currentYearTotal = invoices
+        .filter(inv => getYearKey(inv.date) === selectedYear)
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+      
+      const prevYear = String(currentYear - 1);
+      const prevYearTotal = invoices
+        .filter(inv => getYearKey(inv.date) === prevYear)
+        .reduce((sum, inv) => sum + inv.totalAmount, 0);
+      
+      return {
+        current: currentYearTotal,
+        previous: prevYearTotal,
+        rate: calculateGrowthRate(currentYearTotal, prevYearTotal)
+      };
+    }
+    
+    return null;
+  }, [reportType, selectedQuarter, selectedYear, invoices]);
+
+  const availableCustomersForChart = useMemo(() => {
+    if (reportType === 'quarter' && selectedQuarter) {
+      const { year, quarter } = parseQuarterKey(selectedQuarter);
+      const quarterMonths = getQuarterMonths(quarter, year);
+      const quarterInvoices = invoices.filter(inv => quarterMonths.includes(getMonthKey(inv.date)));
+      const customerNames = new Set(quarterInvoices.map(inv => inv.customerName).filter(Boolean));
+      return Array.from(customerNames).sort();
+    }
+    
+    if (reportType === 'year' && selectedYear) {
+      const yearInvoices = invoices.filter(inv => getYearKey(inv.date) === selectedYear);
+      const customerNames = new Set(yearInvoices.map(inv => inv.customerName).filter(Boolean));
+      return Array.from(customerNames).sort();
+    }
+    
+    return [];
+  }, [reportType, selectedQuarter, selectedYear, invoices]);
+
+  // Monthly breakdown for quarter/year reports (not for month reports)
+  const monthlyBreakdown = useMemo(() => {
+    if (reportType === 'quarter' && selectedQuarter) {
+      const { year, quarter } = parseQuarterKey(selectedQuarter);
+      const quarterMonths = getQuarterMonths(quarter, year);
+      return quarterMonths.map(monthKey => {
+        let monthInvoices = invoices.filter(inv => getMonthKey(inv.date) === monthKey);
+        if (selectedCustomerForChart) {
+          monthInvoices = monthInvoices.filter(inv => inv.customerName === selectedCustomerForChart);
+        }
+        return {
+          month: monthKey,
+          revenue: monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: monthInvoices.length
+        };
+      });
+    }
+    
+    if (reportType === 'year' && selectedYear) {
+      const yearNum = parseInt(selectedYear, 10);
+      return Array.from({ length: 12 }, (_, i) => {
+        const month = i + 1;
+        const monthKey = `${yearNum}-${String(month).padStart(2, '0')}`;
+        let monthInvoices = invoices.filter(inv => getMonthKey(inv.date) === monthKey);
+        if (selectedCustomerForChart) {
+          monthInvoices = monthInvoices.filter(inv => inv.customerName === selectedCustomerForChart);
+        }
+        return {
+          month: monthKey,
+          revenue: monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: monthInvoices.length
+        };
+      });
+    }
+    
+    return null;
+  }, [reportType, selectedQuarter, selectedYear, invoices, selectedCustomerForChart]);
+
+  // ------------------------------------------------------------------
+  // Daily Revenue Breakdown (月報表專用：每日營收趨勢)
+  // ------------------------------------------------------------------
+  const dailyBreakdown = useMemo(() => {
+    if (reportType !== 'month' || !selectedMonth) return null;
+
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    // 初始化每日數據
+    const dailyData = Array.from({ length: daysInMonth }, (_, i) => ({
+      day: i + 1,
+      revenue: 0,
+      count: 0
+    }));
+
+    // 填入發票數據
+    filteredInvoices.forEach(inv => {
+      const date = new Date(inv.date);
+      // 確保日期是屬於選定月份 (雙重檢查)
+      if (date.getMonth() + 1 === month && date.getFullYear() === year) {
+        const day = date.getDate();
+        if (dailyData[day - 1]) {
+          dailyData[day - 1].revenue += inv.totalAmount;
+          dailyData[day - 1].count += 1;
+        }
+      }
+    });
+
+    return dailyData;
+  }, [reportType, selectedMonth, filteredInvoices]);
+
+  // Previous year monthly breakdown (similar logic to Dashboard)
+  const previousYearMonthlyBreakdown = useMemo(() => {
+    if (reportType === 'quarter' && selectedQuarter) {
+      const { year, quarter } = parseQuarterKey(selectedQuarter);
+      const prevYear = year - 1;
+      const prevQuarterMonths = getQuarterMonths(quarter, prevYear);
+      
+      const customerId = selectedCustomerForChart ? customers.find(c => c.name === selectedCustomerForChart)?.id : undefined;
+      
+      const prevYearMonthlyTargets = customerId
+        ? revenueTargets.filter(t => 
+            t.year === prevYear && 
+            !t.quarter && 
+            t.month &&
+            t.customerId === customerId
+          )
+        : revenueTargets.filter(t => 
+            t.year === prevYear && 
+            !t.quarter && 
+            t.month
+          );
+      
+      const hasAnyMonthlyData = prevYearMonthlyTargets.length > 0;
+      
+      return prevQuarterMonths.map(monthKey => {
+        const [yearStr, monthStr] = monthKey.split('-');
+        const month = parseInt(monthStr, 10);
+        
+        if (hasAnyMonthlyData) {
+          const monthTargets = prevYearMonthlyTargets.filter(t => t.month === month);
+          if (monthTargets.length > 0) {
+            const totalRevenue = monthTargets.reduce((sum, t) => {
+              const amount = t.actualAmount !== undefined && t.actualAmount !== null ? t.actualAmount : 0;
+              return sum + amount;
+            }, 0);
+            
+            return {
+              month: monthKey,
+              revenue: totalRevenue,
+              count: 0
+            };
+          }
+        }
+        
+        if (selectedCustomerForChart) {
+          return {
+            month: monthKey,
+            revenue: 0,
+            count: 0
+          };
+        }
+        
+        if (hasAnyMonthlyData) {
+          return {
+            month: monthKey,
+            revenue: 0,
+            count: 0
+          };
+        }
+        
+        const monthInvoices = invoices.filter(inv => 
+          getMonthKey(inv.date) === monthKey
+        );
+        
+        return {
+          month: monthKey,
+          revenue: monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: monthInvoices.length
+        };
+      });
+    }
+    
+    if (reportType === 'year' && selectedYear) {
+      const currentYear = parseInt(selectedYear, 10);
+      const prevYear = currentYear - 1;
+      
+      const customerId = selectedCustomerForChart ? customers.find(c => c.name === selectedCustomerForChart)?.id : undefined;
+      
+      const prevYearMonthlyTargets = customerId
+        ? revenueTargets.filter(t => 
+            t.year === prevYear && 
+            !t.quarter && 
+            t.month &&
+            t.customerId === customerId
+          )
+        : revenueTargets.filter(t => 
+            t.year === prevYear && 
+            !t.quarter && 
+            t.month
+          );
+      
+      const prevYearAnnualTarget = revenueTargets.find(t => 
+        t.year === prevYear && 
+        !t.quarter && 
+        !t.month &&
+        (customerId ? t.customerId === customerId : !t.customerId)
+      );
+      
+      const calculatedAnnualFromMonthly = prevYearMonthlyTargets.length > 0
+        ? prevYearMonthlyTargets.reduce((sum, t) => {
+            return sum + (t.actualAmount !== undefined && t.actualAmount !== null ? t.actualAmount : 0);
+          }, 0)
+        : 0;
+      
+      const hasAnyMonthlyData = prevYearMonthlyTargets.length > 0;
+      const hasAnnualManualData = prevYearAnnualTarget && 
+        prevYearAnnualTarget.actualAmount !== undefined && 
+        prevYearAnnualTarget.actualAmount !== null &&
+        prevYearAnnualTarget.actualAmount > 0;
+      
+      return Array.from({ length: 12 }, (_, i) => {
+        const month = i + 1;
+        const monthKey = `${prevYear}-${String(month).padStart(2, '0')}`;
+        
+        if (hasAnyMonthlyData) {
+          const monthTargets = prevYearMonthlyTargets.filter(t => t.month === month);
+          if (monthTargets.length > 0) {
+            const totalRevenue = monthTargets.reduce((sum, t) => {
+              const amount = t.actualAmount !== undefined && t.actualAmount !== null ? t.actualAmount : 0;
+              return sum + amount;
+            }, 0);
+            
+            return {
+              month: monthKey,
+              revenue: totalRevenue,
+              count: 0
+            };
+          }
+        }
+        
+        if (!selectedCustomerForChart && hasAnnualManualData && !hasAnyMonthlyData && prevYearAnnualTarget && calculatedAnnualFromMonthly === 0) {
+          return {
+            month: monthKey,
+            revenue: (prevYearAnnualTarget.actualAmount || 0) / 12,
+            count: 0
+          };
+        }
+        
+        if (selectedCustomerForChart) {
+          return {
+            month: monthKey,
+            revenue: 0,
+            count: 0
+          };
+        }
+        
+        if (hasAnyMonthlyData) {
+          return {
+            month: monthKey,
+            revenue: 0,
+            count: 0
+          };
+        }
+        
+        const monthInvoices = invoices.filter(inv => getMonthKey(inv.date) === monthKey);
+        
+        return {
+          month: monthKey,
+          revenue: monthInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: monthInvoices.length
+        };
+      });
+    }
+    
+    return null;
+  }, [reportType, selectedQuarter, selectedYear, invoices, selectedCustomerForChart, revenueTargets, customers]);
+
+  const quarterlyBreakdown = useMemo(() => {
+    if (reportType === 'year' && selectedYear) {
+      const yearNum = parseInt(selectedYear, 10);
+      return [1, 2, 3, 4].map(quarter => {
+        const quarterMonths = getQuarterMonths(quarter, yearNum);
+        const quarterInvoices = invoices.filter(inv => 
+          quarterMonths.includes(getMonthKey(inv.date))
+        );
+        return {
+          quarter: `Q${quarter}`,
+          revenue: quarterInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: quarterInvoices.length
+        };
+      });
+    }
+    return null;
+  }, [reportType, selectedYear, invoices]);
+
+  const previousYearQuarterlyBreakdown = useMemo(() => {
+    if (reportType === 'year' && selectedYear) {
+      const currentYear = parseInt(selectedYear, 10);
+      const prevYear = currentYear - 1;
+      
+      const prevYearQuarterlyTargets = revenueTargets.filter(t => t.year === prevYear && t.quarter);
+      const hasManualData = prevYearQuarterlyTargets.some(t => t.actualAmount !== undefined && t.actualAmount !== null);
+      
+      const prevYearInvoices = invoices.filter(inv => {
+        const invYear = parseInt(getYearKey(inv.date), 10);
+        return invYear === prevYear;
+      });
+      const hasInvoiceData = prevYearInvoices.length > 0;
+      
+      if (!hasManualData && !hasInvoiceData) return null;
+      
+      return [1, 2, 3, 4].map(quarter => {
+        const quarterTarget = prevYearQuarterlyTargets.find(t => t.quarter === quarter);
+        if (quarterTarget && quarterTarget.actualAmount !== undefined && quarterTarget.actualAmount !== null) {
+          return {
+            quarter: `Q${quarter}`,
+            revenue: quarterTarget.actualAmount,
+            count: 0
+          };
+        }
+        
+        const quarterMonths = getQuarterMonths(quarter, prevYear);
+        const quarterInvoices = invoices.filter(inv => 
+          quarterMonths.includes(getMonthKey(inv.date))
+        );
+        return {
+          quarter: `Q${quarter}`,
+          revenue: quarterInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
+          count: quarterInvoices.length
+        };
+      });
+    }
+    return null;
+  }, [reportType, selectedYear, invoices, revenueTargets]);
+
+  return (
+    <div className="max-w-7xl mx-auto p-6 md:p-8 space-y-8">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="text-slate-500 hover:text-brand-600 transition-colors p-1"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+            )}
+            <h1 className="text-3xl font-bold text-slate-800 tracking-tight">報表分析 Reports</h1>
+          </div>
+          <p className="text-slate-500 mt-1">查看月報表、季報表與年度報表</p>
+        </div>
+      </div>
+
+      {/* Report Type Tabs */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setReportType('month')}
+            className={`flex-1 px-4 py-2 rounded-lg font-medium transition-all ${
+              reportType === 'month'
+                ? 'bg-brand-500 text-white shadow-md'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            月報表
+          </button>
+          <button
+            onClick={() => setReportType('quarter')}
+            className={`flex-1 px-4 py-2 rounded-lg font-medium transition-all ${
+              reportType === 'quarter'
+                ? 'bg-brand-500 text-white shadow-md'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            季報表
+          </button>
+          <button
+            onClick={() => setReportType('year')}
+            className={`flex-1 px-4 py-2 rounded-lg font-medium transition-all ${
+              reportType === 'year'
+                ? 'bg-brand-500 text-white shadow-md'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+            }`}
+          >
+            年報表
+          </button>
+        </div>
+
+        {/* Time Period Selector */}
+        <div className="bg-stone-50 rounded-lg p-4">
+          <label className="text-sm text-slate-600 font-medium block mb-2">
+            {reportType === 'month' ? '選擇月份' : reportType === 'quarter' ? '選擇季度' : '選擇年份'}
+          </label>
+          <div className="relative">
+            {reportType === 'month' && (
+              <select 
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="appearance-none w-full bg-white border border-stone-200 text-slate-800 text-lg font-bold rounded-lg py-2 pl-3 pr-8 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 cursor-pointer"
+              >
+                {availableMonths.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            )}
+            {reportType === 'quarter' && (
+              <select 
+                value={selectedQuarter}
+                onChange={(e) => setSelectedQuarter(e.target.value)}
+                className="appearance-none w-full bg-white border border-stone-200 text-slate-800 text-lg font-bold rounded-lg py-2 pl-3 pr-8 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 cursor-pointer"
+              >
+                {availableQuarters.map(q => {
+                  const { year, quarter } = parseQuarterKey(q);
+                  return (
+                    <option key={q} value={q}>{year}年 第{quarter}季 (Q{quarter})</option>
+                  );
+                })}
+              </select>
+            )}
+            {reportType === 'year' && (
+              <select 
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="appearance-none w-full bg-white border border-stone-200 text-slate-800 text-lg font-bold rounded-lg py-2 pl-3 pr-8 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 cursor-pointer"
+              >
+                {availableYears.map(y => (
+                  <option key={y} value={y}>{y}年</option>
+                ))}
+              </select>
+            )}
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-gradient-to-br from-brand-500 to-brand-600 p-6 rounded-2xl shadow-lg shadow-brand-900/10 text-white flex flex-col justify-between relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-10 -mt-10 blur-2xl"></div>
+          <div className="flex justify-between items-start mb-4 relative z-10">
+            <div className="p-3 rounded-xl bg-white/20 text-white">
+              <DollarSign className="w-6 h-6" />
+            </div>
+            <span className="text-xs font-semibold uppercase tracking-wider text-brand-50">Revenue</span>
+          </div>
+          <div className="relative z-10">
+            <p className="text-brand-50 font-medium mb-1">
+              {reportType === 'month' ? '本月總營收 (未稅)' : 
+               reportType === 'quarter' ? '本季總營收 (未稅)' : 
+               '本年總營收 (未稅)'}
+            </p>
+            <h3 className="text-3xl font-bold tracking-tight">{formatCurrency(totalRevenue)}</h3>
+            {growthRateData && growthRateData.rate !== null && (
+              <p className="text-brand-50 text-sm mt-1 opacity-90">
+                成長率: {formatGrowthRate(growthRateData.rate)}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-between group hover:border-slate-300 transition-colors">
+          <div className="flex justify-between items-start mb-4">
+            <div className="p-3 rounded-xl bg-slate-50 text-slate-600">
+              <TrendingUp className="w-6 h-6" />
+            </div>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Activity</span>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500 font-medium block mb-1">
+              {reportType === 'month' ? '本月單據數量' : 
+               reportType === 'quarter' ? '本季單據數量' : 
+               '本年單據數量'}
+            </p>
+            <div className="flex items-baseline gap-2">
+              <h3 className="text-3xl font-bold text-slate-800">{filteredInvoices.length}</h3>
+              <span className="text-sm text-slate-400">筆交易</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-between group hover:border-slate-300 transition-colors">
+          <div className="flex justify-between items-start mb-4">
+            <div className="p-3 rounded-xl bg-blue-50 text-blue-600">
+              <FileText className="w-6 h-6" />
+            </div>
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Customers</span>
+          </div>
+          <div>
+            <p className="text-sm text-slate-500 font-medium block mb-1">客戶數量</p>
+            <div className="flex items-baseline gap-2">
+              <h3 className="text-3xl font-bold text-slate-800">{customerStats.length}</h3>
+              <span className="text-sm text-slate-400">位客戶</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Customer Revenue Distribution Pie Chart & Daily Trend (Month Report) */}
+      {reportType === 'month' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 1. Customer Pie Chart */}
+          {customerRevenueDistribution && customerRevenueDistribution.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-brand-500" />
+                客戶營收占比 ({selectedMonth})
+              </h3>
+              <div className="flex-1 min-h-[300px] flex flex-col">
+                <div className="h-64 mb-6">
+                  <Pie
+                    data={{
+                      labels: customerRevenueDistribution.map(c => c.name),
+                      datasets: [
+                        {
+                          data: customerRevenueDistribution.map(c => c.revenue),
+                          backgroundColor: [
+                            'rgba(249, 115, 22, 0.8)',
+                            'rgba(249, 115, 22, 0.6)',
+                            'rgba(249, 115, 22, 0.4)',
+                            'rgba(249, 115, 22, 0.2)',
+                            'rgba(249, 115, 22, 0.1)',
+                            'rgba(156, 163, 175, 0.8)',
+                            'rgba(156, 163, 175, 0.6)',
+                            'rgba(156, 163, 175, 0.4)',
+                          ],
+                          borderColor: '#ffffff',
+                          borderWidth: 2,
+                        },
+                      ],
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                          callbacks: {
+                            label: (context) => {
+                              const customer = customerRevenueDistribution[context.dataIndex];
+                              return `${customer.name}: ${formatCurrency(customer.revenue)} (${customer.percentage.toFixed(1)}%)`;
+                            },
+                          },
+                        },
+                      },
+                    }}
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto max-h-60 space-y-2 pr-2 custom-scrollbar">
+                  {customerRevenueDistribution.map((customer, index) => (
+                    <div key={customer.name} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100/50">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <div 
+                          className="w-3 h-3 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: index < 8 
+                              ? ['rgba(249, 115, 22, 0.8)', 'rgba(249, 115, 22, 0.6)', 'rgba(249, 115, 22, 0.4)', 'rgba(249, 115, 22, 0.2)', 'rgba(249, 115, 22, 0.1)', 'rgba(156, 163, 175, 0.8)', 'rgba(156, 163, 175, 0.6)', 'rgba(156, 163, 175, 0.4)'][index]
+                              : 'rgba(156, 163, 175, 0.4)'
+                          }}
+                        ></div>
+                        <span className="text-sm font-medium text-slate-700 truncate">{customer.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0 ml-2">
+                        <span className="text-sm text-slate-600 font-mono">{formatCurrency(customer.revenue)}</span>
+                        <span className="text-sm font-bold text-brand-600 w-14 text-right">{customer.percentage.toFixed(1)}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 2. Daily Revenue Trend Bar Chart (New Feature) */}
+          {dailyBreakdown && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-blue-500" />
+                每日營收走勢 ({selectedMonth})
+              </h3>
+              <div className="flex-1 min-h-[300px] flex items-center justify-center">
+                <Bar
+                  data={{
+                    labels: dailyBreakdown.map(d => `${d.day}日`),
+                    datasets: [
+                      {
+                        label: '當日營收',
+                        data: dailyBreakdown.map(d => d.revenue),
+                        backgroundColor: (context) => {
+                          const value = context.parsed.y;
+                          // 週末或高營收可以用不同顏色 (這裡先用統一漸層藍)
+                          return 'rgba(59, 130, 246, 0.7)'; 
+                        },
+                        borderRadius: 4,
+                        hoverBackgroundColor: 'rgba(59, 130, 246, 1)',
+                      },
+                    ],
+                  }}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: { display: false },
+                      tooltip: {
+                        callbacks: {
+                          title: (items) => `${selectedMonth}-${items[0].label.replace('日', '')}`,
+                          label: (context) => {
+                            const data = dailyBreakdown[context.dataIndex];
+                            return [
+                              `營收: ${formatCurrency(data.revenue)}`,
+                              `單據: ${data.count} 筆`
+                            ];
+                          },
+                        },
+                      },
+                    },
+                    scales: {
+                      x: {
+                        grid: { display: false },
+                        ticks: {
+                          font: { size: 10 },
+                          maxRotation: 0,
+                          autoSkip: true,
+                          maxTicksLimit: 15 // 避免日期太擠
+                        }
+                      },
+                      y: {
+                        beginAtZero: true,
+                        grid: { color: '#f1f5f9' },
+                        ticks: {
+                          callback: (value) => {
+                            if (typeof value === 'number') {
+                              return value >= 10000 ? `${(value / 10000).toFixed(0)}萬` : value;
+                            }
+                            return value;
+                          },
+                          font: { size: 10 }
+                        },
+                        border: { display: false }
+                      },
+                    },
+                  }}
+                />
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">最高單日</p>
+                  <p className="text-sm font-bold text-slate-800">
+                    {(() => {
+                      const max = Math.max(...dailyBreakdown.map(d => d.revenue));
+                      return max > 0 ? formatCurrency(max) : '-';
+                    })()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">日均營收</p>
+                  <p className="text-sm font-bold text-slate-800">
+                    {formatCurrency(totalRevenue / new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate())}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">活躍天數</p>
+                  <p className="text-sm font-bold text-slate-800">
+                    {dailyBreakdown.filter(d => d.revenue > 0).length} 天
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Charts Section - Show for quarter and year reports only (NOT for month reports) */}
+      {(reportType === 'quarter' || reportType === 'year') && (monthlyBreakdown || previousYearMonthlyBreakdown) && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-brand-500" />
+              {reportType === 'quarter' ? '季度月份趨勢' : '年度月份趨勢'}
+            </h3>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-600 font-medium whitespace-nowrap">篩選客戶:</label>
+              <select
+                value={selectedCustomerForChart}
+                onChange={(e) => setSelectedCustomerForChart(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 min-w-[180px]"
+              >
+                <option value="">全部客戶</option>
+                {availableCustomersForChart && availableCustomersForChart.map(customerName => (
+                  <option key={customerName} value={customerName}>{customerName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="h-64">
+            <Line
+              data={{
+                labels: (monthlyBreakdown || previousYearMonthlyBreakdown || []).map(m => {
+                  const [year, month] = m.month.split('-');
+                  return `${parseInt(month, 10)}月`;
+                }).filter((label, index, self) => self.indexOf(label) === index),
+                datasets: [
+                  {
+                    label: reportType === 'year' 
+                      ? (selectedCustomerForChart ? `${selectedCustomerForChart} ${selectedYear}年營收` : `${selectedYear}年總營收`)
+                      : (selectedCustomerForChart ? `${selectedCustomerForChart} ${selectedQuarter}營收` : `${selectedQuarter}總營收`),
+                    data: (monthlyBreakdown || []).map(m => m.revenue),
+                    borderColor: 'rgb(249, 115, 22)',
+                    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                    tension: 0.4,
+                  },
+                  ...(previousYearMonthlyBreakdown ? [{
+                    label: reportType === 'year'
+                      ? (selectedCustomerForChart ? `${selectedCustomerForChart} ${parseInt(selectedYear, 10) - 1}年營收` : `${parseInt(selectedYear, 10) - 1}年總營收`)
+                      : (() => {
+                          const { year } = parseQuarterKey(selectedQuarter);
+                          const prevYear = year - 1;
+                          return selectedCustomerForChart
+                            ? `${selectedCustomerForChart} ${prevYear} Q${parseQuarterKey(selectedQuarter).quarter}營收`
+                            : `${prevYear} Q${parseQuarterKey(selectedQuarter).quarter}總營收`;
+                        })(),
+                    data: previousYearMonthlyBreakdown.map(m => m.revenue),
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderDash: [],
+                    borderWidth: 2,
+                    tension: 0.4,
+                  }] : []),
+                ],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    display: true,
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: (context) => `${context.dataset.label || '營收'}: ${formatCurrency(context.parsed.y)}`,
+                    },
+                  },
+                },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      callback: (value) => formatCurrency(value as number),
+                    },
+                  },
+                },
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Detailed Data Analysis Table */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+             <h3 className="font-bold text-slate-800 flex items-center gap-2">
+               <FileText className="w-5 h-5 text-brand-500" />
+               詳細數據分析表
+             </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="px-6 py-3 font-semibold">月份</th>
+                  <th className="px-6 py-3 font-semibold text-right">本期營收</th>
+                  <th className="px-6 py-3 font-semibold text-right">去年同期</th>
+                  <th className="px-6 py-3 font-semibold text-right">差異金額</th>
+                  <th className="px-6 py-3 font-semibold text-right">成長率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(monthlyBreakdown || []).map((item, index) => {
+                  const prevItem = previousYearMonthlyBreakdown ? previousYearMonthlyBreakdown[index] : null;
+                  const currentRevenue = item.revenue;
+                  const prevRevenue = prevItem ? prevItem.revenue : 0;
+                  const diff = currentRevenue - prevRevenue;
+                  const growthRate = calculateGrowthRate(currentRevenue, prevRevenue);
+                  const [year, month] = item.month.split('-');
+
+                  return (
+                    <tr key={item.month} className="bg-white border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4 font-medium text-slate-900">
+                        {parseInt(month, 10)}月
+                      </td>
+                      <td className="px-6 py-4 text-right font-medium text-slate-700">
+                        {formatCurrency(currentRevenue)}
+                      </td>
+                      <td className="px-6 py-4 text-right text-slate-500">
+                        {prevRevenue > 0 ? formatCurrency(prevRevenue) : '-'}
+                      </td>
+                      <td className={`px-6 py-4 text-right font-medium ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-slate-500'}`}>
+                        {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {prevRevenue > 0 ? (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                            growthRate > 0 ? 'bg-green-100 text-green-800' : growthRate < 0 ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-800'
+                          }`}>
+                            {growthRate > 0 ? '+' : ''}{growthRate.toFixed(1)}%
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {/* Total Row */}
+                <tr className="bg-slate-50 font-bold border-t border-slate-200">
+                  <td className="px-6 py-4 text-slate-900">總計</td>
+                  <td className="px-6 py-4 text-right text-brand-600">
+                    {formatCurrency((monthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0))}
+                  </td>
+                  <td className="px-6 py-4 text-right text-slate-600">
+                    {formatCurrency((previousYearMonthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0))}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    {(() => {
+                      const totalCurrent = (monthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0);
+                      const totalPrev = (previousYearMonthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0);
+                      const diff = totalCurrent - totalPrev;
+                      return (
+                        <span className={`${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-slate-600'}`}>
+                          {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                        </span>
+                      );
+                    })()}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                     {(() => {
+                      const totalCurrent = (monthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0);
+                      const totalPrev = (previousYearMonthlyBreakdown || []).reduce((sum, item) => sum + item.revenue, 0);
+                      const rate = calculateGrowthRate(totalCurrent, totalPrev);
+                      return totalPrev > 0 ? (
+                        <span className={`${rate > 0 ? 'text-green-600' : rate < 0 ? 'text-red-600' : 'text-slate-600'}`}>
+                           {rate > 0 ? '+' : ''}{rate.toFixed(1)}%
+                        </span>
+                      ) : '-';
+                    })()}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        </div>
+      )}
+
+      {/* Quarterly Breakdown Chart for Year Reports */}
+      {reportType === 'year' && quarterlyBreakdown && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <PieChart className="w-5 h-5 text-brand-500" />
+            季度分布 {previousYearQuarterlyBreakdown && `(${selectedYear} vs ${parseInt(selectedYear, 10) - 1})`}
+          </h3>
+          <div className="h-64">
+            <Bar
+              data={{
+                labels: quarterlyBreakdown.map(q => q.quarter),
+                datasets: [
+                  {
+                    label: `${selectedYear}年季度營收`,
+                    data: quarterlyBreakdown.map(q => q.revenue),
+                    backgroundColor: [
+                      'rgba(249, 115, 22, 0.8)',
+                      'rgba(249, 115, 22, 0.6)',
+                      'rgba(249, 115, 22, 0.4)',
+                      'rgba(249, 115, 22, 0.2)',
+                    ],
+                    borderColor: [
+                      'rgb(249, 115, 22)',
+                      'rgb(249, 115, 22)',
+                      'rgb(249, 115, 22)',
+                      'rgb(249, 115, 22)',
+                    ],
+                    borderWidth: 1,
+                  },
+                  ...(previousYearQuarterlyBreakdown ? [{
+                    label: `${parseInt(selectedYear, 10) - 1}年季度營收`,
+                    data: previousYearQuarterlyBreakdown.map(q => q.revenue),
+                    backgroundColor: [
+                      'rgba(156, 163, 175, 0.8)',
+                      'rgba(156, 163, 175, 0.6)',
+                      'rgba(156, 163, 175, 0.4)',
+                      'rgba(156, 163, 175, 0.2)',
+                    ],
+                    borderColor: [
+                      'rgb(156, 163, 175)',
+                      'rgb(156, 163, 175)',
+                      'rgb(156, 163, 175)',
+                      'rgb(156, 163, 175)',
+                    ],
+                    borderWidth: 1,
+                  }] : []),
+                ],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    display: previousYearQuarterlyBreakdown !== null,
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: (context) => `${context.dataset.label || '季度營收'}: ${formatCurrency(context.parsed.y)}`,
+                    },
+                  },
+                },
+                scales: {
+                  y: {
+                    beginAtZero: true,
+                    ticks: {
+                      callback: (value) => formatCurrency(value as number),
+                    },
+                  },
+                },
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Reports;
