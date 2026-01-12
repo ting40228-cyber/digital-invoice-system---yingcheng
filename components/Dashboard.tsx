@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { Invoice, CustomerStat, COMPANY_INFO, CompanySettings, RevenueTarget, Customer } from '../types';
 import { 
-  getMonthKey, 
+  getLocalMonthKey, 
   formatCurrency
 } from '../utils/helpers';
 import InvoiceSheet from './InvoiceSheet'; // Import for Batch Rendering
@@ -18,7 +18,7 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectInvoice, companySettings, revenueTargets = [], customers = [] }) => {
-  const [selectedMonth, setSelectedMonth] = useState<string>(getMonthKey(new Date().toISOString()));
+  const [selectedMonth, setSelectedMonth] = useState<string>(getLocalMonthKey(new Date().toISOString().split('T')[0]));
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
   
@@ -30,14 +30,14 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
   // Get available months for filtering
   const availableMonths = useMemo(() => {
       const months = new Set<string>();
-      invoices.forEach(inv => months.add(getMonthKey(inv.date)));
-      months.add(getMonthKey(new Date().toISOString()));
+      invoices.forEach(inv => months.add(getLocalMonthKey(inv.date)));
+      months.add(getLocalMonthKey(new Date().toISOString().split('T')[0]));
       return Array.from(months).sort().reverse();
   }, [invoices]);
 
   // Filter invoices by selected month
   const filteredInvoices = useMemo(() => {
-      return invoices.filter(inv => getMonthKey(inv.date) === selectedMonth);
+      return invoices.filter(inv => getLocalMonthKey(inv.date) === selectedMonth);
   }, [invoices, selectedMonth]);
 
   // For backward compatibility, keep monthlyInvoices

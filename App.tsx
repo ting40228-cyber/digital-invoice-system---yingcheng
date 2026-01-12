@@ -112,32 +112,37 @@ const App: React.FC = () => {
     // This is a simplified approach: just save all of them.
     // Ideally Settings component should call saveProduct directly for single items.
     // But since we are adapting existing props:
-    for (const p of newProducts) {
-      await saveProduct(p);
+    try {
+      for (const p of newProducts) {
+        await saveProduct(p);
+      }
+    } catch (e) {
+      console.error("Error saving products: ", e);
+      alert("部分商品資料儲存失敗，請檢查網路連線");
     }
-    // Note: Deletions are not handled here because the Settings component 
-    // passed the *result* array. If an item is missing, it won't be deleted from Firebase 
-    // with this logic.
-    // FIX: We need to change Settings to call deleteProduct. 
-    // FOR NOW: Let's assume Settings component will be updated later to use individual actions
-    // OR we implement a sync logic here (too complex).
-    // BETTER STRATEGY: Update Settings.tsx later to call DB functions directly? 
-    // No, keep props interface. We can just save all for now. Deletion is the tricky part.
-    // Let's implement a simple "sync" for products/customers in Settings.tsx instead.
-    // For this App.tsx, we will just save what we get.
   };
 
   const handleUpdateCustomers = async (newCustomers: Customer[]) => {
     setCustomers(newCustomers);
-    for (const c of newCustomers) {
-      await saveCustomer(c);
+    try {
+      for (const c of newCustomers) {
+        await saveCustomer(c);
+      }
+    } catch (e) {
+      console.error("Error saving customers: ", e);
+      alert("部分客戶資料儲存失敗，請檢查網路連線");
     }
   };
 
   const handleUpdatePricingRules = async (newRules: PricingRule[]) => {
     setPricingRules(newRules);
-    for (const r of newRules) {
-      await savePricingRule(r);
+    try {
+      for (const r of newRules) {
+        await savePricingRule(r);
+      }
+    } catch (e) {
+      console.error("Error saving pricing rules: ", e);
+      alert("價格規則儲存失敗，請檢查網路連線");
     }
   };
 

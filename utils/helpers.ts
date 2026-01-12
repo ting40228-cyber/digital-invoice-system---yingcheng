@@ -250,6 +250,24 @@ export const getMonthKey = (dateString: string): string => {
   return `${year}-${month}`;
 };
 
+// Ensure time zone correctness for consistent month keys
+export const getLocalMonthKey = (dateString: string): string => {
+  // If the date string is YYYY-MM-DD format (without time), it might be parsed as UTC 
+  // which can shift the day back depending on local timezone.
+  // For 'YYYY-MM-DD', just take the first 7 chars if it matches regex
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    return dateString.substring(0, 7);
+  }
+  
+  // Otherwise parse date but ensure we use the local year/month, not UTC
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return new Date().toISOString().substring(0, 7);
+  
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
 // Get quarter key from date string (format: YYYY-Q1, YYYY-Q2, etc.)
 export const getQuarterKey = (dateString: string): string => {
   const date = new Date(dateString);
