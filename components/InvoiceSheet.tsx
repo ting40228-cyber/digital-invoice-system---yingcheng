@@ -17,6 +17,7 @@ interface InvoiceSheetProps {
   isRemoteSignMode?: boolean; // If true, automatically enter signing mode (for remote signing links)
   onUpdate?: (updatedInvoice: Invoice) => void;
   onSave?: () => void;
+  onDelete?: () => void;
   onSignAndComplete?: (signature: string) => void;
   onCancel?: () => void;
 }
@@ -34,6 +35,7 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
   isRemoteSignMode = false,
   onUpdate, 
   onSave, 
+  onDelete,
   onSignAndComplete,
   onCancel 
 }) => {
@@ -540,6 +542,19 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
         <div className="flex flex-wrap gap-2">
           {isEditing ? (
             <>
+              {onDelete && (
+                <button 
+                  onClick={() => {
+                    if (window.confirm('確定要刪除此單據嗎？此動作無法復原。')) {
+                      onDelete();
+                    }
+                  }} 
+                  className="px-3 py-1.5 text-red-600 hover:bg-red-50 rounded-lg text-sm font-medium transition-colors border border-transparent hover:border-red-100"
+                >
+                  <Trash2 className="w-4 h-4 inline mr-1" />
+                  刪除
+                </button>
+              )}
               <button onClick={onCancel} className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium transition-colors">取消</button>
               <button onClick={onSave} className="flex items-center px-3 py-1.5 bg-brand-600 text-white rounded-lg hover:bg-brand-700 text-sm font-medium shadow-sm transition-all hover:shadow-md">
                 <Save className="w-4 h-4 mr-2" /> 儲存 (Save)

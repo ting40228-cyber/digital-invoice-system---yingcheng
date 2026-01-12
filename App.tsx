@@ -10,7 +10,7 @@ import { Settings, ChevronLeft, LogOut, BarChart3 } from 'lucide-react';
 
 // DB Service imports
 import { 
-  subscribeInvoices, saveInvoice, 
+  subscribeInvoices, saveInvoice, deleteInvoice, 
   subscribeCustomers, saveCustomer,
   subscribeProducts, saveProduct,
   subscribeCompanySettings, saveCompanySettings,
@@ -272,6 +272,18 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteInvoice = async () => {
+    if (!currentInvoice) return;
+    
+    try {
+        await deleteInvoice(currentInvoice.id);
+        setView('dashboard');
+    } catch (e) {
+        console.error("Error deleting document: ", e);
+        alert("刪除失敗，請檢查網路連線");
+    }
+  };
+
   const handleSignAndComplete = async (signatureBase64: string) => {
       if (!currentInvoice) return;
 
@@ -523,6 +535,7 @@ const App: React.FC = () => {
                  isEditing={view === 'create'}
                  onUpdate={handleUpdateCurrentInvoice}
                  onSave={handleSaveInvoice}
+                 onDelete={handleDeleteInvoice}
                  onSignAndComplete={handleSignAndComplete}
                  onCancel={() => setView('dashboard')}
                />
