@@ -89,10 +89,10 @@ export const updateAuthCredentials = async (role: 'owner' | 'staff', newEmail?: 
     password: newPassword || currentCreds.password
   };
   
-  await setDoc(authRef, {
+  await setDoc(authRef, sanitizeForFirestore({
     ...authData,
     [role]: updatedCreds
-  });
+  }));
 };
 
 export const subscribeAdminSettings = (callback: (settings: AdminSettings | null) => void) => {
@@ -108,7 +108,7 @@ export const subscribeAdminSettings = (callback: (settings: AdminSettings | null
 
 export const saveAdminSettings = async (settings: AdminSettings) => {
   const ref = doc(db, COLL_SETTINGS, 'auth');
-  await setDoc(ref, settings, { merge: true });
+  await setDoc(ref, sanitizeForFirestore(settings), { merge: true });
 };
 
 export { AdminSettings };
@@ -139,9 +139,11 @@ export const subscribeInvoices = (callback: (invoices: Invoice[]) => void) => {
   });
 };
 
+import { sanitizeForFirestore } from '../utils/helpers';
+
 export const saveInvoice = async (invoice: Invoice) => {
   const ref = doc(db, COLL_INVOICES, invoice.id);
-  await setDoc(ref, invoice);
+  await setDoc(ref, sanitizeForFirestore(invoice));
 };
 
 export const deleteInvoice = async (id: string) => {
@@ -159,7 +161,7 @@ export const subscribeCustomers = (callback: (customers: Customer[]) => void) =>
 
 export const saveCustomer = async (customer: Customer) => {
   const ref = doc(db, COLL_CUSTOMERS, customer.id);
-  await setDoc(ref, customer);
+  await setDoc(ref, sanitizeForFirestore(customer));
 };
 
 export const deleteCustomer = async (id: string) => {
@@ -177,7 +179,7 @@ export const subscribeProducts = (callback: (products: Product[]) => void) => {
 
 export const saveProduct = async (product: Product) => {
   const ref = doc(db, COLL_PRODUCTS, product.id);
-  await setDoc(ref, product);
+  await setDoc(ref, sanitizeForFirestore(product));
 };
 
 export const deleteProduct = async (id: string) => {
@@ -199,7 +201,7 @@ export const subscribeCompanySettings = (callback: (settings: CompanySettings | 
 
 export const saveCompanySettings = async (settings: CompanySettings) => {
   const ref = doc(db, COLL_SETTINGS, 'company_info');
-  await setDoc(ref, settings);
+  await setDoc(ref, sanitizeForFirestore(settings));
 };
 
 // --- Revenue Targets ---
@@ -213,7 +215,7 @@ export const subscribeRevenueTargets = (callback: (targets: RevenueTarget[]) => 
 
 export const saveRevenueTarget = async (target: RevenueTarget) => {
   const ref = doc(db, COLL_REVENUE_TARGETS, target.id);
-  await setDoc(ref, target);
+  await setDoc(ref, sanitizeForFirestore(target));
 };
 
 export const deleteRevenueTarget = async (id: string) => {
@@ -231,7 +233,7 @@ export const subscribePricingRules = (callback: (rules: PricingRule[]) => void) 
 
 export const savePricingRule = async (rule: PricingRule) => {
   const ref = doc(db, COLL_PRICING_RULES, rule.id);
-  await setDoc(ref, rule);
+  await setDoc(ref, sanitizeForFirestore(rule));
 };
 
 export const deletePricingRule = async (id: string) => {
@@ -249,7 +251,7 @@ export const subscribePricingHistory = (callback: (history: PricingRuleHistory[]
 
 export const savePricingHistory = async (history: PricingRuleHistory) => {
   const ref = doc(db, COLL_PRICING_HISTORY, history.id);
-  await setDoc(ref, history);
+  await setDoc(ref, sanitizeForFirestore(history));
 };
 
 // --- Batch Operations (for initialization or bulk updates) ---

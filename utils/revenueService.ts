@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { RevenueRecord } from '../types';
+import { sanitizeForFirestore } from './helpers';
 
 const REVENUE_COLLECTION = 'revenueRecords';
 
@@ -41,7 +42,7 @@ const docToRecord = (docData: any): RevenueRecord => {
 // 創建新記錄
 export const createRevenueRecord = async (record: Omit<RevenueRecord, 'id'>): Promise<string> => {
   try {
-    const docRef = await addDoc(collection(db, REVENUE_COLLECTION), {
+    const docRef = await addDoc(collection(db, REVENUE_COLLECTION), sanitizeForFirestore({
       date: dateToTimestamp(record.date),
       vendorName: record.vendorName,
       amount: record.amount,
@@ -49,7 +50,7 @@ export const createRevenueRecord = async (record: Omit<RevenueRecord, 'id'>): Pr
       month: record.month,
       createdAt: Date.now(),
       updatedAt: Date.now()
-    });
+    }));
     return docRef.id;
   } catch (error) {
     console.error('Error creating revenue record:', error);
@@ -70,7 +71,7 @@ export const updateRevenueRecord = async (id: string, updates: Partial<Omit<Reve
       updateData.date = dateToTimestamp(updates.date);
     }
     
-    await updateDoc(recordRef, updateData);
+    await updateDoc(recordRef, sanitizeForFirestore(updateData));
   } catch (error) {
     console.error('Error updating revenue record:', error);
     throw error;
@@ -95,7 +96,7 @@ export const uploadHistoricalData = async (records: Omit<RevenueRecord, 'id' | '
 
     records.forEach((record) => {
       const docRef = doc(collection(db, REVENUE_COLLECTION));
-      batch.set(docRef, {
+      batch.set(docRef, sanitizeForFirestore({
         date: dateToTimestamp(record.date),
         vendorName: record.vendorName,
         amount: record.amount,
@@ -103,7 +104,7 @@ export const uploadHistoricalData = async (records: Omit<RevenueRecord, 'id' | '
         month: record.month,
         createdAt: now,
         updatedAt: now
-      });
+      }));
     });
 
     await batch.commit();

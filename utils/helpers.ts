@@ -310,3 +310,32 @@ export const getAvailableYears = (invoices: Array<{ date: string }>): string[] =
   invoices.forEach(inv => years.add(getYearKey(inv.date)));
   return Array.from(years).sort().reverse();
 };
+
+/**
+ * Remove undefined values from object to satisfy Firestore requirements
+ * Firestore does not support 'undefined' as a value.
+ */
+export const sanitizeForFirestore = (obj: any): any => {
+  if (obj === null || typeof obj !== 'object') {
+    return obj;
+  }
+  
+  // Handle Date - preserve it
+  if (obj instanceof Date) {
+    return obj;
+  }
+
+  // Handle Array
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeForFirestore);
+  }
+
+  const result: any = {};
+  for (const key in obj) {
+    const value = obj[key];
+    if (value !== undefined) {
+      result[key] = sanitizeForFirestore(value);
+    }
+  }
+  return result;
+};
