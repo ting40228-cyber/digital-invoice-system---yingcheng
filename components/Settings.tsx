@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CompanySettings, Product, Customer, PricingRule, PricingRuleHistory, RevenueTarget, PricingTier, PriceCategory, CustomerTier } from '../types';
+import { AdminSettings } from '../services/db';
 import { generateId } from '../utils/helpers';
 import { Save, Plus, Trash2, Download, Building, Package, User, DollarSign, ChevronDown, ChevronRight, Ruler, X, History, Copy, Target, Calendar, Layers, Lock, ShieldCheck, Database, Users } from 'lucide-react';
 import { updateAuthCredentials } from '../services/db';
@@ -18,6 +19,8 @@ interface SettingsProps {
   onUpdatePricingRules: (rules: PricingRule[]) => void;
   onAddPricingHistory: (history: PricingRuleHistory) => void;
   onUpdateRevenueTargets: (targets: RevenueTarget[]) => void;
+  adminSettings?: AdminSettings | null;
+  onUpdateAdminSettings?: (settings: AdminSettings) => void;
 }
 
 const Settings: React.FC<SettingsProps> = ({ 
@@ -33,7 +36,9 @@ const Settings: React.FC<SettingsProps> = ({
   onUpdateCustomers, 
   onUpdatePricingRules,
   onAddPricingHistory,
-  onUpdateRevenueTargets
+  onUpdateRevenueTargets,
+  adminSettings,
+  onUpdateAdminSettings
 }) => {
   const [activeTab, setActiveTab] = useState<'company' | 'products' | 'customers' | 'pricing' | 'targets' | 'backup' | 'security'>('company');
   

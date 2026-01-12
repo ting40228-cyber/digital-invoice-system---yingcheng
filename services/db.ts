@@ -21,6 +21,17 @@ import {
 import { db } from '../firebase'; // Removed auth import as we use custom auth logic
 import { Invoice, Customer, Product, CompanySettings, RevenueTarget, PricingRule, PricingRuleHistory } from '../types';
 
+export interface UserCredentials {
+  email?: string;
+  password?: string;
+}
+
+export interface AdminSettings {
+  owner?: UserCredentials;
+  staff?: UserCredentials;
+  [key: string]: any;
+}
+
 // Collection Names
 const COLL_INVOICES = 'invoices';
 const COLL_CUSTOMERS = 'customers';
@@ -83,6 +94,24 @@ export const updateAuthCredentials = async (role: 'owner' | 'staff', newEmail?: 
     [role]: updatedCreds
   });
 };
+
+export const subscribeAdminSettings = (callback: (settings: AdminSettings | null) => void) => {
+  const ref = doc(db, COLL_SETTINGS, 'auth');
+  return onSnapshot(ref, (doc) => {
+    if (doc.exists()) {
+      callback(doc.data() as AdminSettings);
+    } else {
+      callback(null);
+    }
+  });
+};
+
+export const saveAdminSettings = async (settings: AdminSettings) => {
+  const ref = doc(db, COLL_SETTINGS, 'auth');
+  await setDoc(ref, settings, { merge: true });
+};
+
+export { AdminSettings };
 
 export const logout = async () => {
   // No-op for custom auth, handled by App state
