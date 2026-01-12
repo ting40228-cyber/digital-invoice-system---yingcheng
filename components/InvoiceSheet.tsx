@@ -562,20 +562,20 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
             </>
           ) : isSigningMode ? (
              <div className="flex items-center gap-2">
-                {!isRemoteSignMode && (
-                    <button 
-                        onClick={() => setIsSigningMode(false)}
-                        className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium"
-                    >
-                        取消
-                    </button>
-                )}
                 <button 
-                    onClick={confirmSignature}
-                    className="flex items-center px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium shadow-sm animate-pulse"
+                    onClick={() => setIsSigningMode(false)}
+                    className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium"
                 >
-                    <Check className="w-4 h-4 mr-2" /> 確認簽收
+                    取消
                 </button>
+                {!isRemoteSignMode && (
+                  <button 
+                      onClick={confirmSignature}
+                      className="flex items-center px-3 py-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium shadow-sm animate-pulse"
+                  >
+                      <Check className="w-4 h-4 mr-2" /> 確認簽收
+                  </button>
+                )}
              </div>
           ) : (
             <>  
@@ -1061,6 +1061,14 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                        onChange={handleSignatureChange}
                      />
                      <div className="text-center text-xs text-brand-600 mt-2 font-bold animate-pulse">請在框內簽名</div>
+                     {isRemoteSignMode && (
+                       <button 
+                           onClick={confirmSignature}
+                           className="w-full mt-3 flex items-center justify-center px-4 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 text-base font-bold shadow-lg shadow-emerald-200 transform active:scale-95 transition-all"
+                       >
+                           <Check className="w-5 h-5 mr-2" /> 確認簽收 (Confirm)
+                       </button>
+                     )}
                  </div>
              ) : (
                   <div className="relative">
