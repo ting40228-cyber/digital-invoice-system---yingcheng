@@ -88,12 +88,18 @@ const Settings: React.FC<SettingsProps> = ({
   // Security State
   const [ownerPassword, setOwnerPassword] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
+  const [staffEmail, setStaffEmail] = useState('');
 
   // Sync with props and migrate old data format
   useEffect(() => { setLocalCompany(companySettings); }, [companySettings]);
   useEffect(() => { setLocalProducts(products); }, [products]);
   useEffect(() => { setLocalPricingRules(pricingRules); }, [pricingRules]);
   useEffect(() => { setLocalRevenueTargets(revenueTargets); }, [revenueTargets]);
+  useEffect(() => {
+    if (adminSettings?.owner?.email) setOwnerEmail(adminSettings.owner.email);
+    if (adminSettings?.staff?.email) setStaffEmail(adminSettings.staff.email);
+  }, [adminSettings]);
   useEffect(() => { 
     // Migrate old customer format (contactPerson -> contactPersons, priceCategory -> customerTier)
     const migratedCustomers = customers.map((c: any) => {
@@ -383,18 +389,20 @@ const Settings: React.FC<SettingsProps> = ({
   };
 
   // --- Security Logic ---
-  const handleUpdatePassword = async (role: 'owner' | 'staff', password: string) => {
-    if (!password.trim()) {
-      alert('密碼不能為空');
+  const handleUpdateAccount = async (role: 'owner' | 'staff', email: string, password: string) => {
+    if (!email.trim()) {
+      alert('Email 不能為空');
       return;
     }
+    
     try {
-      await updateAuthCredentials(role, undefined, password);
-      alert(`${role === 'owner' ? '管理員' : '員工'}密碼已更新`);
+      // Pass undefined if password is empty string to keep current password
+      await updateAuthCredentials(role, email, password || undefined);
+      alert(`${role === 'owner' ? '管理員' : '員工'}帳號資訊已更新`);
       if (role === 'owner') setOwnerPassword('');
       if (role === 'staff') setStaffPassword('');
     } catch (e) {
-      console.error('Update password failed', e);
+      console.error('Update account failed', e);
       alert('更新失敗，請稍後再試');
     }
   };
@@ -1556,7 +1564,17 @@ const Settings: React.FC<SettingsProps> = ({
                   
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">重設密碼</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">電子郵件 (帳號)</label>
+                      <input 
+                        type="email" 
+                        value={ownerEmail}
+                        onChange={(e) => setOwnerEmail(e.target.value)}
+                        className="w-full p-2 border border-slate-300 rounded-lg"
+                        placeholder="請輸入 Email"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">重設密碼 (留空則不修改)</label>
                       <input 
                         type="password" 
                         value={ownerPassword}
@@ -1566,10 +1584,10 @@ const Settings: React.FC<SettingsProps> = ({
                       />
                     </div>
                     <button 
-                      onClick={() => handleUpdatePassword('owner', ownerPassword)}
+                      onClick={() => handleUpdateAccount('owner', ownerEmail, ownerPassword)}
                       className="w-full bg-brand-600 text-white py-2 rounded-lg hover:bg-brand-700 transition-colors font-medium text-sm"
                     >
-                      更新管理員密碼
+                      更新管理員帳號
                     </button>
                   </div>
                 </div>
@@ -1588,7 +1606,17 @@ const Settings: React.FC<SettingsProps> = ({
                   
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">重設密碼</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">電子郵件 (帳號)</label>
+                      <input 
+                        type="email" 
+                        value={staffEmail}
+                        onChange={(e) => setStaffEmail(e.target.value)}
+                        className="w-full p-2 border border-slate-300 rounded-lg"
+                        placeholder="請輸入 Email"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">重設密碼 (留空則不修改)</label>
                       <input 
                         type="password" 
                         value={staffPassword}
@@ -1598,10 +1626,10 @@ const Settings: React.FC<SettingsProps> = ({
                       />
                     </div>
                     <button 
-                      onClick={() => handleUpdatePassword('staff', staffPassword)}
+                      onClick={() => handleUpdateAccount('staff', staffEmail, staffPassword)}
                       className="w-full bg-slate-600 text-white py-2 rounded-lg hover:bg-slate-700 transition-colors font-medium text-sm"
                     >
-                      更新員工密碼
+                      更新員工帳號
                     </button>
                   </div>
                 </div>
