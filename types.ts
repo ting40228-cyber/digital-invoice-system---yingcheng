@@ -16,6 +16,8 @@ export interface Invoice {
   customerPhone?: string;
   customerTaxId?: string; // 客戶統編
   contactPerson?: string; // 下單人員
+  serviceClient?: string; // 服務客戶（僅用於康士藤模板）
+  serviceCompany?: string; // 服務公司（僅用於康士藤模板）
   date: string; // ISO string YYYY-MM-DD
   items: InvoiceItem[];
   totalAmount: number;
@@ -36,7 +38,7 @@ export interface Product {
 }
 
 // 顧客分級類型（用於區分不同類型的客戶）
-export type CustomerTier = 'general' | 'industry';
+export type CustomerTier = 'general' | 'industry' | 'kangshiting';
 
 export interface Customer {
   id: string;

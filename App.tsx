@@ -7,6 +7,9 @@ import InvoiceSheet from './components/InvoiceSheet';
 import Login from './components/Login';
 import SettingsView from './components/Settings';
 import { Settings, ChevronLeft, LogOut, BarChart3 } from 'lucide-react';
+import { ToastContainer, Toast } from './components/Toast';
+import { registerToastCallback, toast } from './utils/toast';
+import { handleError, handleFirestoreError, handleBatchError } from './utils/errorHandler';
 
 // DB Service imports
 import { 
@@ -17,7 +20,12 @@ import {
   subscribeRevenueTargets, saveRevenueTarget,
   subscribePricingRules, savePricingRule,
   subscribePricingHistory, savePricingHistory,
-  subscribeAdminSettings, saveAdminSettings, AdminSettings
+  subscribeAdminSettings, saveAdminSettings, AdminSettings,
+  batchSaveProducts,
+  batchSaveCustomers,
+  batchSavePricingRules,
+  batchSaveRevenueTargets,
+  logout as firebaseLogout
 } from './services/db';
 
 const App: React.FC = () => {
@@ -37,6 +45,20 @@ const App: React.FC = () => {
   const [currentInvoice, setCurrentInvoice] = useState<Invoice | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  
+  // Toast state
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  
+  // Register toast callback
+  useEffect(() => {
+    registerToastCallback((toast) => {
+      setToasts((prev) => [...prev, toast]);
+    });
+  }, []);
+  
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   // --- Firebase Subscriptions ---
   useEffect(() => {
@@ -97,70 +119,96 @@ const App: React.FC = () => {
   // --- Save Handlers (Connect to Firebase) ---
 
   const handleSaveCompanySettings = async (settings: CompanySettings) => {
-    // Optimistic update
-    setCompanySettings(settings); 
-    await saveCompanySettings(settings);
+    const previousSettings = companySettings;
+    try {
+      // Optimistic update
+      setCompanySettings(settings); 
+      await saveCompanySettings(settings);
+      toast.success('公司資訊已儲存');
+    } catch (error) {
+      handleFirestoreError(error, '儲存公司資訊');
+      // Revert optimistic update
+      setCompanySettings(previousSettings);
+    }
   };
 
   const handleUpdateProducts = async (newProducts: Product[]) => {
-    // Note: The Settings component passes the whole array, but our DB service saves individually.
-    // For efficiency in this refactor, we just iterate and save. 
-    // In a real app, we'd only save what changed, but this is fine for now.
-    setProducts(newProducts); // Optimistic
+    const previousProducts = products;
+    setProducts(newProducts); // Optimistic update
     
-    // Find added/updated products
-    // This is a simplified approach: just save all of them.
-    // Ideally Settings component should call saveProduct directly for single items.
-    // But since we are adapting existing props:
     try {
-      for (const p of newProducts) {
-        await saveProduct(p);
-      }
-    } catch (e) {
-      console.error("Error saving products: ", e);
-      alert("部分商品資料儲存失敗，請檢查網路連線");
+      await batchSaveProducts(newProducts);
+      toast.success('商品資料已儲存');
+    } catch (error) {
+      handleBatchError(error, '儲存商品', 0, newProducts.length);
+      // Revert optimistic update
+      setProducts(previousProducts);
     }
   };
 
   const handleUpdateCustomers = async (newCustomers: Customer[]) => {
-    setCustomers(newCustomers);
+    const previousCustomers = customers;
+    setCustomers(newCustomers); // Optimistic update
+    
     try {
-      for (const c of newCustomers) {
-        await saveCustomer(c);
-      }
-    } catch (e) {
-      console.error("Error saving customers: ", e);
-      alert("部分客戶資料儲存失敗，請檢查網路連線");
+      await batchSaveCustomers(newCustomers);
+      toast.success('客戶資料已儲存');
+    } catch (error) {
+      handleBatchError(error, '儲存客戶', 0, newCustomers.length);
+      // Revert optimistic update
+      setCustomers(previousCustomers);
     }
   };
 
   const handleUpdatePricingRules = async (newRules: PricingRule[]) => {
-    setPricingRules(newRules);
+    const previousRules = pricingRules;
+    setPricingRules(newRules); // Optimistic update
+    
     try {
-      for (const r of newRules) {
-        await savePricingRule(r);
-      }
-    } catch (e) {
-      console.error("Error saving pricing rules: ", e);
-      alert("價格規則儲存失敗，請檢查網路連線");
+      await batchSavePricingRules(newRules);
+      toast.success('價格規則已儲存');
+    } catch (error) {
+      handleBatchError(error, '儲存價格規則', 0, newRules.length);
+      // Revert optimistic update
+      setPricingRules(previousRules);
     }
   };
 
   const handleAddPricingHistory = async (history: PricingRuleHistory) => {
-    setPricingHistory(prev => [history, ...prev]);
-    await savePricingHistory(history);
+    const previousHistory = pricingHistory;
+    try {
+      setPricingHistory(prev => [history, ...prev]);
+      await savePricingHistory(history);
+    } catch (error) {
+      handleFirestoreError(error, '儲存價格歷史');
+      setPricingHistory(previousHistory);
+    }
   };
 
   const handleUpdateRevenueTargets = async (targets: RevenueTarget[]) => {
-    setRevenueTargets(targets);
-    for (const t of targets) {
-      await saveRevenueTarget(t);
+    const previousTargets = revenueTargets;
+    setRevenueTargets(targets); // Optimistic update
+    
+    try {
+      await batchSaveRevenueTargets(targets);
+      toast.success('營收目標已儲存');
+    } catch (error) {
+      handleBatchError(error, '儲存營收目標', 0, targets.length);
+      // Revert optimistic update
+      setRevenueTargets(previousTargets);
     }
   };
 
   const handleUpdateAdminSettings = async (settings: AdminSettings) => {
-    setAdminSettings(settings); // Optimistic
-    await saveAdminSettings(settings);
+    const previousSettings = adminSettings;
+    try {
+      setAdminSettings(settings); // Optimistic
+      await saveAdminSettings(settings);
+      toast.success('管理員設定已儲存');
+    } catch (error) {
+      handleFirestoreError(error, '儲存管理員設定');
+      setAdminSettings(previousSettings);
+    }
   };
 
   // --- Invoice Logic ---
@@ -178,7 +226,7 @@ const App: React.FC = () => {
               setView('sign-only');
           } else {
               if (view === 'sign-only') {
-                  alert('無效的簽署連結或單據已刪除');
+                  toast.error('無效的簽署連結或單據已刪除');
                   window.history.pushState({}, '', window.location.pathname);
                   if (user) setView('dashboard');
                   else setView('login');
@@ -267,13 +315,11 @@ const App: React.FC = () => {
     const invoiceToSave = { ...currentInvoice, status };
 
     try {
-        // Optimistic update locally not strictly needed as snapshot will fire, 
-        // but good for UX if offline. We rely on snapshot for simplicity here.
         await saveInvoice(invoiceToSave);
+        toast.success('對帳單已儲存');
         setView('dashboard');
-    } catch (e) {
-        console.error("Error adding document: ", e);
-        alert("儲存失敗，請檢查網路連線");
+    } catch (error) {
+        handleFirestoreError(error, '儲存對帳單');
     }
   };
 
@@ -282,10 +328,10 @@ const App: React.FC = () => {
     
     try {
         await deleteInvoice(currentInvoice.id);
+        toast.success('對帳單已刪除');
         setView('dashboard');
-    } catch (e) {
-        console.error("Error deleting document: ", e);
-        alert("刪除失敗，請檢查網路連線");
+    } catch (error) {
+        handleFirestoreError(error, '刪除對帳單');
     }
   };
 
@@ -301,12 +347,12 @@ const App: React.FC = () => {
       try {
           await saveInvoice(completedInvoice);
           setCurrentInvoice(completedInvoice);
+          toast.success('簽署成功！');
           if (view === 'sign-only') {
-              alert('簽署成功！您可以關閉此頁面。');
+              toast.info('您可以關閉此頁面', 8000);
           }
-      } catch (e) {
-          console.error("Error signing: ", e);
-          alert("簽署失敗，請重試");
+      } catch (error) {
+          handleFirestoreError(error, '簽署對帳單');
       }
   };
 
@@ -324,9 +370,18 @@ const App: React.FC = () => {
       setView('dashboard');
   };
 
-  const handleLogout = () => {
-      setUser(null);
-      setView('login');
+  const handleLogout = async () => {
+      try {
+          await firebaseLogout();
+          setUser(null);
+          setView('login');
+          toast.success('已成功登出');
+      } catch (error) {
+          handleError(error, '登出失敗');
+          // 即使登出失敗，也清除本地狀態
+          setUser(null);
+          setView('login');
+      }
   };
 
   if (isLoading) {
@@ -367,6 +422,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-stone-50 font-sans text-slate-800 flex flex-col">
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       {/* Top Navigation Bar */}
       <nav className="bg-white border-b border-brand-100 px-6 py-3 flex justify-between items-center sticky top-0 z-50 shadow-sm print:hidden h-16">
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('dashboard')}>

@@ -3,7 +3,11 @@ import { CompanySettings, Product, Customer, PricingRule, PricingRuleHistory, Re
 import { AdminSettings } from '../services/db';
 import { generateId } from '../utils/helpers';
 import { Save, Plus, Trash2, Download, Building, Package, User, DollarSign, ChevronDown, ChevronRight, Ruler, X, History, Copy, Target, Calendar, Layers, Lock, ShieldCheck, Database, Users } from 'lucide-react';
-import { updateAuthCredentials } from '../services/db';
+import { createUser, updateUserRole, changePassword } from '../services/db';
+import { toast } from '../utils/toast';
+import { handleError } from '../utils/errorHandler';
+import { User as FirebaseUser } from 'firebase/auth';
+import { auth } from '../firebase';
 
 interface SettingsProps {
   companySettings: CompanySettings;
@@ -120,7 +124,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const handleCompanySave = () => {
     onSaveCompanySettings(localCompany);
-    alert('公司資訊已儲存');
+    // Toast 通知由 App.tsx 的 handleSaveCompanySettings 處理
   };
 
   // --- Product Logic ---
@@ -157,7 +161,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const saveProducts = () => {
     onUpdateProducts(localProducts);
-    alert('商品資料已儲存');
+    // Toast 通知由 App.tsx 的 handleUpdateProducts 處理
   };
 
   // --- Customer Logic ---
@@ -203,7 +207,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const saveCustomers = () => {
     onUpdateCustomers(localCustomers);
-    alert('客戶資料已儲存');
+    // Toast 通知由 App.tsx 的 handleUpdateCustomers 處理
   };
 
   // --- Pricing Rule Logic ---
@@ -241,7 +245,7 @@ const Settings: React.FC<SettingsProps> = ({
     const rule = localPricingRules.find(r => r.id === ruleId);
     if (!rule) return;
     if (rule.tiers.length >= 5) {
-      alert('階梯數量最多5階');
+      toast.warning('階梯數量最多5階');
       return;
     }
     const maxMinQty = rule.tiers.length > 0 
@@ -293,12 +297,12 @@ const Settings: React.FC<SettingsProps> = ({
       updatedAt: Date.now()
     };
     setLocalPricingRules([...localPricingRules, newRule]);
-    alert('價格規則已複製');
+    toast.success('價格規則已複製');
   };
 
   const savePricingRules = () => {
     onUpdatePricingRules(localPricingRules);
-    alert('價格規則已儲存');
+    // Toast 通知由 App.tsx 的 handleUpdatePricingRules 處理
   };
 
   // --- Revenue Targets Logic ---
@@ -325,7 +329,7 @@ const Settings: React.FC<SettingsProps> = ({
     );
 
     if (exists) {
-      alert(`${year}年 ${month ? `${month}月` : (quarter ? `Q${quarter}` : '年度')} 的資料已存在，請直接修改現有欄位即可。`);
+      toast.warning(`${year}年 ${month ? `${month}月` : (quarter ? `Q${quarter}` : '年度')} 的資料已存在，請直接修改現有欄位即可。`);
       return;
     }
 
@@ -366,7 +370,7 @@ const Settings: React.FC<SettingsProps> = ({
 
   const saveRevenueTargets = () => {
     onUpdateRevenueTargets(localRevenueTargets);
-    alert('目標設定已儲存');
+    // Toast 通知由 App.tsx 的 handleUpdateRevenueTargets 處理
   };
 
   // --- Backup Logic ---
@@ -391,19 +395,70 @@ const Settings: React.FC<SettingsProps> = ({
   // --- Security Logic ---
   const handleUpdateAccount = async (role: 'owner' | 'staff', email: string, password: string) => {
     if (!email.trim()) {
-      alert('Email 不能為空');
+      toast.warning('Email 不能為空');
       return;
     }
     
     try {
-      // Pass undefined if password is empty string to keep current password
-      await updateAuthCredentials(role, email, password || undefined);
-      alert(`${role === 'owner' ? '管理員' : '員工'}帳號資訊已更新`);
-      if (role === 'owner') setOwnerPassword('');
-      if (role === 'staff') setStaffPassword('');
-    } catch (e) {
-      console.error('Update account failed', e);
-      alert('更新失敗，請稍後再試');
+      const currentUser = auth.currentUser;
+      
+      if (!currentUser) {
+        toast.error('請先登入');
+        return;
+      }
+      
+      // 如果提供了新密碼，更新密碼
+      if (password && password.trim().length > 0) {
+        if (password.length < 6) {
+          toast.warning('密碼長度至少需要6個字元');
+          return;
+        }
+        await changePassword(currentUser, password);
+        toast.success('密碼已更新');
+      }
+      
+      // 更新角色（如果郵件改變，需要創建新用戶）
+      // 注意：Firebase Auth 不允許直接更改郵件，需要重新創建
+      // 這裡我們只更新 Firestore 中的角色記錄
+      const existingEmail = role === 'owner' ? ownerEmail : staffEmail;
+      if (email !== existingEmail) {
+        // 嘗試創建新用戶或更新角色
+        try {
+          await createUser(email, password || 'temp123456', role);
+          toast.success(`${role === 'owner' ? '管理員' : '員工'}帳號已創建`);
+        } catch (error: any) {
+          if (error.code === 'auth/email-already-in-use') {
+            // 用戶已存在，只更新角色
+            await updateUserRole(email, role);
+            toast.success(`${role === 'owner' ? '管理員' : '員工'}角色已更新`);
+          } else {
+            throw error;
+          }
+        }
+      } else {
+        // 只更新角色
+        await updateUserRole(email, role);
+        toast.success(`${role === 'owner' ? '管理員' : '員工'}角色已更新`);
+      }
+      
+      // 更新本地狀態
+      if (role === 'owner') {
+        setOwnerEmail(email);
+        setOwnerPassword('');
+      } else {
+        setStaffEmail(email);
+        setStaffPassword('');
+      }
+      
+      // 更新 AdminSettings（僅儲存郵件）
+      if (onUpdateAdminSettings) {
+        await onUpdateAdminSettings({
+          ownerEmail: role === 'owner' ? email : adminSettings?.ownerEmail,
+          staffEmail: role === 'staff' ? email : adminSettings?.staffEmail,
+        });
+      }
+    } catch (error) {
+      handleError(error, '更新帳號失敗');
     }
   };
 
@@ -844,8 +899,14 @@ const Settings: React.FC<SettingsProps> = ({
                           <div>
                             <h3 className="font-semibold text-slate-800">{c.name}</h3>
                             <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                              <span className={`px-2 py-0.5 rounded ${(c.customerTier || c.priceCategory || 'general') === 'industry' ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100'}`}>
-                                {(c.customerTier || c.priceCategory || 'general') === 'industry' ? '同業' : '一般'}
+                              <span className={`px-2 py-0.5 rounded ${
+                                (c.customerTier || c.priceCategory || 'general') === 'industry' ? 'bg-indigo-50 text-indigo-700' : 
+                                (c.customerTier || c.priceCategory || 'general') === 'kangshiting' ? 'bg-purple-50 text-purple-700' : 
+                                'bg-slate-100'
+                              }`}>
+                                {(c.customerTier || c.priceCategory || 'general') === 'industry' ? '同業' : 
+                                 (c.customerTier || c.priceCategory || 'general') === 'kangshiting' ? '康士藤' : 
+                                 '一般'}
                               </span>
                               <span>{c.taxId ? `統編:${c.taxId}` : '無統編'}</span>
                               <span className="text-slate-300">|</span>
@@ -910,10 +971,10 @@ const Settings: React.FC<SettingsProps> = ({
                             <div className="mb-3">
                               <label className="block text-xs font-medium text-slate-600 mb-1">顧客分級</label>
                               <select
-                                value={(c.customerTier || c.priceCategory || 'general') === 'industry' ? 'industry' : 'general'}
+                                value={(c.customerTier || c.priceCategory || 'general') === 'industry' ? 'industry' : (c.customerTier || c.priceCategory || 'general') === 'kangshiting' ? 'kangshiting' : 'general'}
                                 onChange={(e) => {
                                   const value = e.target.value as CustomerTier;
-                                  // Save customerTier: 'general' can be undefined (default), 'industry' must be saved
+                                  // Save customerTier: 'general' can be undefined (default), others must be saved
                                   updateCustomer(c.id, 'customerTier', value === 'general' ? undefined : value);
                                   // Also update priceCategory for backward compatibility
                                   updateCustomer(c.id, 'priceCategory', value === 'general' ? undefined : value);
@@ -922,8 +983,9 @@ const Settings: React.FC<SettingsProps> = ({
                               >
                                 <option value="general">一般</option>
                                 <option value="industry">同業</option>
+                                <option value="kangshiting">康士藤</option>
                               </select>
-                              <p className="text-xs text-slate-400 mt-1">顧客分級將影響流水編號前綴（一般：CP / 同業：TC）</p>
+                              <p className="text-xs text-slate-400 mt-1">顧客分級將影響流水編號前綴（一般：CP / 同業：TC / 康士藤：CP）</p>
                             </div>
                           </div>
                           
@@ -1181,7 +1243,7 @@ const Settings: React.FC<SettingsProps> = ({
                                   </span>
                                 )}
                                 <span className="text-xs text-slate-500">
-                                  {new Date(history.changedAt).toLocaleString('zh-TW')}
+                                  {new Date(history.timestamp).toLocaleString('zh-TW')}
                                 </span>
                               </div>
                             </div>
@@ -1300,7 +1362,7 @@ const Settings: React.FC<SettingsProps> = ({
                             setExpandedHistoryCustomers(prev => new Set(prev).add(selectedCustomerForTarget));
                           }
                         } else {
-                          alert('該年度的所有月份數據已存在。');
+                          toast.warning('該年度的所有月份數據已存在。');
                         }
                       }}
                       className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 text-sm font-medium flex items-center"

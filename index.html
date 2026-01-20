@@ -68,7 +68,27 @@
 
       @media print {
         @page { size: A4; margin: 0; }
+        @page.landscape { size: A4 landscape; margin: 0; }
         body { background: white; -webkit-print-color-adjust: exact; }
+        .landscape-template {
+          page: landscape;
+        }
+      }
+
+      /* Toast Animations */
+      @keyframes slideIn {
+        from {
+          transform: translateX(100%);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      .animate-slideIn {
+        animation: slideIn 0.3s ease-out;
       }
     </style>
   <script type="importmap">

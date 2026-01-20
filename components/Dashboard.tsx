@@ -265,26 +265,32 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                     });
                     
                     // Ensure invoice sheet elements have proper height and no extra spacing
-                    const invoiceSheetContainers = clonedDoc.querySelectorAll('[class*="max-w-\\[210mm\\]"], [style*="max-width: 210mm"]');
+                    // 查找所有對帳單容器（橫式：297mm）
+                    const invoiceSheetContainers = clonedDoc.querySelectorAll('[class*="max-w-\\[297mm\\]"], [class*="w-\\[297mm\\]"], [style*="max-width: 297mm"], [style*="width: 297mm"]');
                     invoiceSheetContainers.forEach((container, idx) => {
                       const containerEl = container as HTMLElement;
                       // Remove margin-bottom but keep other styles
                       containerEl.style.marginBottom = '0';
-                      // Ensure each sheet has minimum height to fill one page
-                      containerEl.style.minHeight = '287mm'; // A4 height minus margins (5mm each side)
+                      // Ensure each sheet has minimum height to fill one page (A4 landscape: 210mm minus margins)
+                      containerEl.style.minHeight = '200mm'; // A4 landscape height minus margins (5mm each side)
                       containerEl.style.height = 'auto';
                       containerEl.style.maxHeight = 'none';
+                      // Ensure width is set to landscape
+                      containerEl.style.width = '297mm';
+                      containerEl.style.minWidth = '297mm';
+                      containerEl.style.maxWidth = '297mm';
                       // Last invoice sheet should also have no padding-bottom
                       if (idx === invoiceSheetContainers.length - 1) {
                         containerEl.style.paddingBottom = '0';
                       }
                     });
                     
-                    // Fix styles in the cloned document
+                    // Fix styles in the cloned document - 所有對帳單都使用橫式尺寸
                     const clonedElement = clonedDoc.body.firstElementChild as HTMLElement;
                     if (clonedElement) {
-                      clonedElement.style.width = '210mm';
-                      clonedElement.style.maxWidth = '210mm';
+                      clonedElement.style.width = '297mm';
+                      clonedElement.style.minWidth = '297mm';
+                      clonedElement.style.maxWidth = '297mm';
                       clonedElement.style.height = 'auto';
                       clonedElement.style.minHeight = 'auto';
                       clonedElement.style.maxHeight = 'none';
@@ -358,7 +364,7 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                 jsPDF:        { 
                   unit: 'mm', 
                   format: 'a4', 
-                  orientation: 'portrait',
+                  orientation: 'landscape', // 所有對帳單都使用橫式
                   compress: true
                 },
                 pagebreak:    { mode: ['css', 'legacy'] } // Allow page breaks for long content (removed 'after' to prevent blank pages)
@@ -403,6 +409,10 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
       // Dashboard only shows invoice details, not statistics
       // Statistics reports are in the Reports page
       
+      // 收集所有不重複的下單人員和服務客戶（用於下拉選單）
+      const uniqueContactPersons = Array.from(new Set(targetInvoices.map(inv => inv.contactPerson).filter(Boolean))).sort();
+      const uniqueServiceClients = Array.from(new Set(targetInvoices.map(inv => inv.serviceClient).filter(Boolean))).sort();
+
       // Generate invoice detail rows for month report
       let rowsHtml = '';
       
@@ -420,13 +430,15 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
           // Main Invoice Row
           rowsHtml += `
             <tr style="height: 30px;">
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: center; background-color: #ffffff;">${inv.date}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: left; background-color: #ffffff; mso-number-format:'\@';">${inv.serialNumber}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; background-color: #ffffff;">${descriptions.join('、')}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; background-color: #ffffff;">${specifications.join('、')}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; background-color: #ffffff;">${allRemarks}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: right; background-color: #ffffff; mso-number-format:'\#\,\#\#0';">${inv.totalAmount}</td>
-                <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: center; background-color: #ffffff;">${inv.status === 'completed' ? '已簽收' : '未簽收'}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: center; background-color: #ffffff;">${inv.date}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; background-color: #ffffff; mso-number-format:'\@';">${inv.serialNumber}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; background-color: #ffffff;">${descriptions.join('、')}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; background-color: #ffffff;">${specifications.join('、')}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; background-color: #ffffff;">${allRemarks}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: right; background-color: #ffffff; mso-number-format:'\#\,\#\#0';">${inv.totalAmount}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: center; background-color: #ffffff;">${inv.status === 'completed' ? '已簽收' : '未簽收'}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: center; background-color: #ffffff;">${inv.contactPerson || ''}</td>
+                <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: center; background-color: #ffffff;">${inv.serviceClient || ''}</td>
             </tr>
           `;
       });
@@ -438,34 +450,48 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
       
       rowsHtml += `
         <tr style="height: 30px;">
-            <td colspan="5" style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: right; font-weight: bold; color: #1e293b; background-color: #ffffff;">總計 Total (未稅)</td>
-            <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: right; font-weight: bold; color: #1e293b; background-color: #fff7ed; mso-number-format:'\#\,\#\#0';">${totalAmount}</td>
-            <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: center; background-color: #fff7ed;"></td>
+            <td colspan="6" style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: right; font-weight: bold; color: #1e293b; background-color: #ffffff;">總計 Total (未稅)</td>
+            <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: right; font-weight: bold; color: #1e293b; background-color: #fff7ed; mso-number-format:'\#\,\#\#0';">${totalAmount}</td>
+            <td colspan="2" style="border: 1px solid #e2e8f0; padding: 8px 10px; background-color: #fff7ed;"></td>
         </tr>
         <tr style="height: 30px;">
-            <td colspan="5" style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: right; font-weight: bold; color: #ea580c; background-color: #ffffff;">總計 Total (含稅)</td>
-            <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: right; font-weight: bold; color: #ea580c; background-color: #fff7ed; mso-number-format:'\#\,\#\#0';">${grandTotal}</td>
-            <td style="border: 1px solid #fed7aa; padding: 5px 10px; text-align: center; background-color: #fff7ed;"></td>
+            <td colspan="6" style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: right; font-weight: bold; color: #ea580c; background-color: #ffffff;">總計 Total (含稅)</td>
+            <td style="border: 1px solid #e2e8f0; padding: 8px 10px; text-align: right; font-weight: bold; color: #ea580c; background-color: #fff7ed; mso-number-format:'\#\,\#\#0';">${grandTotal}</td>
+            <td colspan="2" style="border: 1px solid #e2e8f0; padding: 8px 10px; background-color: #fff7ed;"></td>
         </tr>
       `;
+
+      // 創建下拉選單的選項列表（用於 Data Validation）
+      const contactPersonList = uniqueContactPersons.length > 0 ? uniqueContactPersons.join(',') : '全部';
+      const serviceClientList = uniqueServiceClients.length > 0 ? uniqueServiceClients.join(',') : '全部';
 
       // Header Info
       const headerHtml = `
         <tr>
-            <td colspan="7" style="text-align: center; font-size: 24px; font-weight: bold; height: 50px; vertical-align: middle; color: #1e293b; background-color: #ffffff;">${COMPANY_INFO.name}</td>
+            <td colspan="9" style="text-align: center; font-size: 24px; font-weight: bold; height: 50px; vertical-align: middle; color: #1e293b; background-color: #ffffff;">${COMPANY_INFO.name}</td>
         </tr>
         <tr>
-            <td colspan="7" style="text-align: center; font-weight: bold; font-size: 18px; height: 40px; color: #334155; background-color: #ffffff;">
+            <td colspan="9" style="text-align: center; font-weight: bold; font-size: 18px; height: 40px; color: #334155; background-color: #ffffff;">
                 ${customerName ? customerName + ' - ' : ''}對帳單明細表 (${periodLabel})
             </td>
         </tr>
         <tr>
-            <td colspan="7" style="text-align: center; color: #64748b; font-size: 14px; height: 30px; border-bottom: 2px solid #fdba74; background-color: #ffffff;">
+            <td colspan="9" style="text-align: center; color: #64748b; font-size: 14px; height: 30px; border-bottom: 2px solid #f97316; background-color: #ffffff;">
                 ${customerName && custPhone ? '客戶電話：' + custPhone : ''} 
                 ${customerName && custAddress ? ' / 客戶地址：' + custAddress : ''}
             </td>
         </tr>
-        <tr style="height: 10px;"><td colspan="7" style="background-color: #ffffff;"></td></tr>
+        <tr style="height: 10px;"><td colspan="9" style="background-color: #ffffff;"></td></tr>
+        <tr>
+            <td colspan="9" style="padding: 10px; background-color: #fff7ed; border: 1px solid #fed7aa;">
+                <strong style="color: #1e293b;">篩選說明：</strong>
+                <span style="color: #64748b; font-size: 12px;">
+                    表格已啟用自動篩選功能。請點擊「下單人員」或「服務客戶」欄位的下拉箭頭來篩選數據。
+                    ${uniqueContactPersons.length > 0 ? `可用的下單人員：${uniqueContactPersons.join('、')}` : ''}
+                    ${uniqueServiceClients.length > 0 ? `可用的服務客戶：${uniqueServiceClients.join('、')}` : ''}
+                </span>
+            </td>
+        </tr>
       `;
 
       const template = `
@@ -488,8 +514,34 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
             <![endif]-->
             <style>
                 br {mso-data-placement:same-cell;}
-                body { background-color: #ffffff; }
-                table { background-color: #ffffff; }
+                body { 
+                    background-color: #ffffff; 
+                    font-family: 'Microsoft JhengHei', 'Noto Sans TC', Arial, sans-serif;
+                }
+                table { 
+                    background-color: #ffffff; 
+                    border-collapse: collapse;
+                }
+                th {
+                    background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+                    color: white;
+                    font-weight: bold;
+                    padding: 12px 10px;
+                    border: 1px solid #ea580c;
+                    text-align: center;
+                    font-size: 13px;
+                }
+                td {
+                    padding: 10px;
+                    border: 1px solid #e2e8f0;
+                    font-size: 12px;
+                }
+                tr:nth-child(even) {
+                    background-color: #f8fafc;
+                }
+                tr:hover {
+                    background-color: #fff7ed;
+                }
             </style>
         </head>
         <body>
@@ -502,17 +554,21 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                     <col style="width: 200px; background-color: #ffffff;" />
                     <col style="width: 100px; background-color: #ffffff;" />
                     <col style="width: 80px; background-color: #ffffff;" />
+                    <col style="width: 120px; background-color: #ffffff;" />
+                    <col style="width: 150px; background-color: #ffffff;" />
                 </colgroup>
                 <thead>
                     ${headerHtml}
                     <tr>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: center; background-color: #fff7ed; color: #1e293b; font-weight: bold;">日期</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: center; background-color: #ffedd5; color: #1e293b; font-weight: bold;">單號</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: left; background-color: #fff7ed; color: #1e293b; font-weight: bold;">品名</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: left; background-color: #fff7ed; color: #1e293b; font-weight: bold;">規格</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: left; background-color: #fff7ed; color: #1e293b; font-weight: bold;">備註</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: right; background-color: #fff7ed; color: #1e293b; font-weight: bold;">金額</th>
-                        <th style="border: 1px solid #fed7aa; padding: 10px; text-align: center; background-color: #fff7ed; color: #1e293b; font-weight: bold;">狀態</th>
+                        <th>日期</th>
+                        <th>單號</th>
+                        <th>品名</th>
+                        <th>規格</th>
+                        <th>備註</th>
+                        <th>金額</th>
+                        <th>狀態</th>
+                        <th x:autofilter="all">下單人員</th>
+                        <th x:autofilter="all">服務客戶</th>
                     </tr>
                 </thead>
                 <tbody style="background-color: #ffffff;">

@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { COMPANY_INFO } from '../types';
 import { Lock, User, ArrowRight, Loader2 } from 'lucide-react';
 import { login } from '../services/db';
+import { handleError } from '../utils/errorHandler';
 
 interface LoginProps {
   onLogin: (role: 'owner' | 'staff') => void;
+  adminSettings?: any; // 保留向後兼容
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -28,8 +30,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setLoading(true);
     
     try {
-      // Use simple auth for now (checking against Firestore 'settings/auth' document)
-      // This is a temporary solution until Firebase Auth is fully configured
       const role = await login(email, password);
       
       if (rememberMe) {
@@ -38,17 +38,35 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         localStorage.removeItem('login_email');
       }
 
-      onLogin(role);
-    } catch (err: any) {
-      console.error("Login error:", err);
-      if (err.message === 'Invalid credentials' || err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        setError('帳號或密碼錯誤');
-      } else if (err.code === 'auth/too-many-requests') {
-        setError('嘗試次數過多，請稍後再試');
-      } else {
-        setError('登入失敗，請檢查網路連線');
-      }
       setLoading(false);
+      onLogin(role);
+    } catch (err: unknown) {
+      setLoading(false);
+      // 使用統一的錯誤處理
+      let errorMessage = '登入失敗，請檢查網路連線';
+      
+      if (err instanceof Error && 'code' in err) {
+        const firebaseError = err as { code: string; message: string };
+        switch (firebaseError.code) {
+          case 'auth/invalid-credential':
+          case 'auth/user-not-found':
+          case 'auth/wrong-password':
+            errorMessage = '帳號或密碼錯誤';
+            break;
+          case 'auth/too-many-requests':
+            errorMessage = '嘗試次數過多，請稍後再試';
+            break;
+          case 'auth/network-request-failed':
+            errorMessage = '網路連線失敗，請檢查您的網路';
+            break;
+          default:
+            errorMessage = firebaseError.message || errorMessage;
+        }
+      }
+      
+      setError(errorMessage);
+      // 不在登入頁面顯示 Toast，因為已經有錯誤訊息顯示在頁面上
+      // handleError(err);
     }
   };
 

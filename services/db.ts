@@ -9,28 +9,20 @@ import {
   where,
   getDocs,
   Timestamp,
-  updateDoc
+  updateDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { 
   signInWithEmailAndPassword, 
   signOut as firebaseSignOut, 
   updatePassword as firebaseUpdatePassword,
+  createUserWithEmailAndPassword,
   User,
   onAuthStateChanged
 } from 'firebase/auth';
-import { db } from '../firebase'; // Removed auth import as we use custom auth logic
+import { db, auth } from '../firebase';
 import { Invoice, Customer, Product, CompanySettings, RevenueTarget, PricingRule, PricingRuleHistory } from '../types';
-
-export interface UserCredentials {
-  email?: string;
-  password?: string;
-}
-
-export interface AdminSettings {
-  owner?: UserCredentials;
-  staff?: UserCredentials;
-  [key: string]: any;
-}
+import { sanitizeForFirestore } from '../utils/helpers';
 
 // Collection Names
 const COLL_INVOICES = 'invoices';
@@ -40,61 +32,143 @@ const COLL_SETTINGS = 'settings';
 const COLL_REVENUE_TARGETS = 'revenueTargets';
 const COLL_PRICING_RULES = 'pricingRules';
 const COLL_PRICING_HISTORY = 'pricingRuleHistory';
+const COLL_USER_ROLES = 'userRoles'; // 儲存用戶角色對應
 
-// --- Auth (Simplified for Firestore-based Auth) ---
-// Note: Ideally use Firebase Auth, but this is a quick custom implementation 
-// storing credentials in Firestore 'settings/auth' document.
+export interface UserRole {
+  email: string;
+  role: 'owner' | 'staff';
+}
 
+export interface AdminSettings {
+  ownerEmail?: string;
+  staffEmail?: string;
+  // 保留向後兼容，但不再使用
+  owner?: { email?: string; password?: string };
+  staff?: { email?: string; password?: string };
+}
+
+// --- Firebase Authentication ---
+
+/**
+ * 登入並返回用戶角色
+ */
 export const login = async (email: string, password: string): Promise<'owner' | 'staff'> => {
-  const authRef = doc(db, COLL_SETTINGS, 'auth');
-  const authSnap = await getDocs(query(collection(db, COLL_SETTINGS), where('__name__', '==', 'auth')));
+  // 處理預設管理員密碼轉換：'admin' -> 'admin123' (Firebase 要求至少 6 個字元)
+  const actualPassword = (email === 'admin@example.com' && password === 'admin') ? 'admin123' : password;
   
-  let authData: any = {};
-  
-  if (authSnap.empty) {
-    // First time login, create default admin
-    authData = {
-      owner: { email: 'admin@example.com', password: 'admin123' },
-      staff: { email: 'staff@example.com', password: 'staff123' }
-    };
-    await setDoc(authRef, authData);
-  } else {
-    authData = authSnap.docs[0].data();
-  }
-
-  // Check Owner
-  if (authData.owner && authData.owner.email === email && authData.owner.password === password) {
+  try {
+    // 先嘗試用實際密碼登入
+    const userCredential = await signInWithEmailAndPassword(auth, email, actualPassword);
+    const user = userCredential.user;
+    
+    // 從 Firestore 獲取用戶角色
+    const roleDoc = await getDocs(
+      query(collection(db, COLL_USER_ROLES), where('email', '==', email))
+    );
+    
+    // 如果已有角色記錄，更新為 owner（確保所有用戶都是管理者）
+    // 所有成功登入的用戶都是管理者
+    if (!roleDoc.empty) {
+      const roleData = roleDoc.docs[0].data() as UserRole;
+      // 如果當前角色不是 owner，更新為 owner
+      if (roleData.role !== 'owner') {
+        await updateDoc(roleDoc.docs[0].ref, {
+          role: 'owner',
+          updatedAt: Timestamp.now()
+        });
+      }
+      return 'owner';
+    }
+    
+    // 如果沒有角色記錄，創建為管理者
+    await setDoc(doc(db, COLL_USER_ROLES, user.uid), {
+      email: user.email,
+      role: 'owner', // 所有用戶都是管理者
+      createdAt: Timestamp.now()
+    });
     return 'owner';
+  } catch (error: any) {
+    // 直接拋出錯誤，不自動創建帳號
+    throw error;
   }
-  
-  // Check Staff
-  if (authData.staff && authData.staff.email === email && authData.staff.password === password) {
-    return 'staff';
-  }
-
-  throw new Error('Invalid credentials');
 };
 
-export const updateAuthCredentials = async (role: 'owner' | 'staff', newEmail?: string, newPassword?: string) => {
-  const authRef = doc(db, COLL_SETTINGS, 'auth');
-  const authSnap = await getDocs(query(collection(db, COLL_SETTINGS), where('__name__', '==', 'auth')));
-  
-  if (authSnap.empty) return; // Should exist if logged in
-  
-  const authData = authSnap.docs[0].data();
-  const currentCreds = authData[role] || {};
-  
-  const updatedCreds = {
-    email: newEmail || currentCreds.email,
-    password: newPassword || currentCreds.password
-  };
-  
-  await setDoc(authRef, sanitizeForFirestore({
-    ...authData,
-    [role]: updatedCreds
-  }));
+/**
+ * 登出
+ */
+export const logout = async (): Promise<void> => {
+  await firebaseSignOut(auth);
 };
 
+/**
+ * 訂閱認證狀態變化
+ */
+export const subscribeAuth = (callback: (user: User | null) => void) => {
+  return onAuthStateChanged(auth, callback);
+};
+
+/**
+ * 獲取當前用戶角色
+ */
+export const getCurrentUserRole = async (user: User): Promise<'owner' | 'staff' | null> => {
+  const roleDoc = await getDocs(
+    query(collection(db, COLL_USER_ROLES), where('email', '==', user.email))
+  );
+  
+  if (!roleDoc.empty) {
+    const roleData = roleDoc.docs[0].data() as UserRole;
+    return roleData.role;
+  }
+  
+  return null;
+};
+
+/**
+ * 更新用戶密碼
+ */
+export const changePassword = async (user: User, newPassword: string): Promise<void> => {
+  await firebaseUpdatePassword(user, newPassword);
+};
+
+/**
+ * 創建新用戶（僅管理員可用）
+ */
+export const createUser = async (email: string, password: string, role: 'owner' | 'staff'): Promise<User> => {
+  const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+  
+  // 儲存角色資訊（所有用戶都是管理者）
+  await setDoc(doc(db, COLL_USER_ROLES, userCredential.user.uid), {
+    email: email,
+    role: 'owner', // 所有用戶都是管理者，忽略傳入的 role 參數
+    createdAt: Timestamp.now()
+  });
+  
+  return userCredential.user;
+};
+
+/**
+ * 更新用戶角色（僅管理員可用）
+ */
+export const updateUserRole = async (email: string, role: 'owner' | 'staff'): Promise<void> => {
+  const roleDoc = await getDocs(
+    query(collection(db, COLL_USER_ROLES), where('email', '==', email))
+  );
+  
+  if (!roleDoc.empty) {
+    // 所有用戶都是管理者，強制設置為 owner
+    await updateDoc(roleDoc.docs[0].ref, {
+      role: 'owner',
+      updatedAt: Timestamp.now()
+    });
+  } else {
+    // 如果不存在，創建新記錄（需要先有 Firebase Auth 用戶）
+    throw new Error('用戶不存在，請先創建 Firebase Auth 帳號');
+  }
+};
+
+/**
+ * 訂閱管理員設定（向後兼容）
+ */
 export const subscribeAdminSettings = (callback: (settings: AdminSettings | null) => void) => {
   const ref = doc(db, COLL_SETTINGS, 'auth');
   return onSnapshot(ref, (doc) => {
@@ -106,27 +180,18 @@ export const subscribeAdminSettings = (callback: (settings: AdminSettings | null
   });
 };
 
+/**
+ * 儲存管理員設定（向後兼容，僅儲存郵件，不儲存密碼）
+ */
 export const saveAdminSettings = async (settings: AdminSettings) => {
   const ref = doc(db, COLL_SETTINGS, 'auth');
-  await setDoc(ref, sanitizeForFirestore(settings), { merge: true });
+  // 只儲存郵件，不儲存密碼
+  const safeSettings: AdminSettings = {
+    ownerEmail: settings.ownerEmail || settings.owner?.email,
+    staffEmail: settings.staffEmail || settings.staff?.email,
+  };
+  await setDoc(ref, sanitizeForFirestore(safeSettings), { merge: true });
 };
-
-export { AdminSettings };
-
-export const logout = async () => {
-  // No-op for custom auth, handled by App state
-};
-
-// Removed subscribeAuth as we manage state in App.tsx for this simple version
-/*
-export const subscribeAuth = (callback: (user: User | null) => void) => {
-  return onAuthStateChanged(auth, callback);
-};
-
-export const changePassword = async (user: User, newPassword: string) => {
-  await firebaseUpdatePassword(user, newPassword);
-};
-*/
 
 // --- Invoices ---
 export const subscribeInvoices = (callback: (invoices: Invoice[]) => void) => {
@@ -138,8 +203,6 @@ export const subscribeInvoices = (callback: (invoices: Invoice[]) => void) => {
     callback(invoices);
   });
 };
-
-import { sanitizeForFirestore } from '../utils/helpers';
 
 export const saveInvoice = async (invoice: Invoice) => {
   const ref = doc(db, COLL_INVOICES, invoice.id);
@@ -255,19 +318,104 @@ export const savePricingHistory = async (history: PricingRuleHistory) => {
 };
 
 // --- Batch Operations (for initialization or bulk updates) ---
-export const batchSaveInvoices = async (invoices: Invoice[]) => {
-  // Note: For large batches, we should use writeBatch, but for simplicity in migration we iterate
-  // Firestore limits batch to 500 operations.
-  const promises = invoices.map(inv => saveInvoice(inv));
-  await Promise.all(promises);
+const BATCH_LIMIT = 500; // Firestore batch limit
+
+/**
+ * 批量儲存對帳單（使用 Firestore batch）
+ */
+export const batchSaveInvoices = async (invoices: Invoice[]): Promise<void> => {
+  if (invoices.length === 0) return;
+  
+  // 分批處理，每批最多 500 個
+  for (let i = 0; i < invoices.length; i += BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = invoices.slice(i, i + BATCH_LIMIT);
+    
+    chunk.forEach(invoice => {
+      const ref = doc(db, COLL_INVOICES, invoice.id);
+      batch.set(ref, sanitizeForFirestore(invoice));
+    });
+    
+    await batch.commit();
+  }
 };
 
-export const batchSaveCustomers = async (customers: Customer[]) => {
-  const promises = customers.map(c => saveCustomer(c));
-  await Promise.all(promises);
+/**
+ * 批量儲存客戶（使用 Firestore batch）
+ */
+export const batchSaveCustomers = async (customers: Customer[]): Promise<void> => {
+  if (customers.length === 0) return;
+  
+  // 分批處理，每批最多 500 個
+  for (let i = 0; i < customers.length; i += BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = customers.slice(i, i + BATCH_LIMIT);
+    
+    chunk.forEach(customer => {
+      const ref = doc(db, COLL_CUSTOMERS, customer.id);
+      batch.set(ref, sanitizeForFirestore(customer));
+    });
+    
+    await batch.commit();
+  }
 };
 
-export const batchSaveProducts = async (products: Product[]) => {
-  const promises = products.map(p => saveProduct(p));
-  await Promise.all(promises);
+/**
+ * 批量儲存商品（使用 Firestore batch）
+ */
+export const batchSaveProducts = async (products: Product[]): Promise<void> => {
+  if (products.length === 0) return;
+  
+  // 分批處理，每批最多 500 個
+  for (let i = 0; i < products.length; i += BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = products.slice(i, i + BATCH_LIMIT);
+    
+    chunk.forEach(product => {
+      const ref = doc(db, COLL_PRODUCTS, product.id);
+      batch.set(ref, sanitizeForFirestore(product));
+    });
+    
+    await batch.commit();
+  }
+};
+
+/**
+ * 批量儲存價格規則（使用 Firestore batch）
+ */
+export const batchSavePricingRules = async (rules: PricingRule[]): Promise<void> => {
+  if (rules.length === 0) return;
+  
+  // 分批處理，每批最多 500 個
+  for (let i = 0; i < rules.length; i += BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = rules.slice(i, i + BATCH_LIMIT);
+    
+    chunk.forEach(rule => {
+      const ref = doc(db, COLL_PRICING_RULES, rule.id);
+      batch.set(ref, sanitizeForFirestore(rule));
+    });
+    
+    await batch.commit();
+  }
+};
+
+/**
+ * 批量儲存營收目標（使用 Firestore batch）
+ */
+export const batchSaveRevenueTargets = async (targets: RevenueTarget[]): Promise<void> => {
+  if (targets.length === 0) return;
+  
+  // 分批處理，每批最多 500 個
+  for (let i = 0; i < targets.length; i += BATCH_LIMIT) {
+    const batch = writeBatch(db);
+    const chunk = targets.slice(i, i + BATCH_LIMIT);
+    
+    chunk.forEach(target => {
+      const ref = doc(db, COLL_REVENUE_TARGETS, target.id);
+      batch.set(ref, sanitizeForFirestore(target));
+    });
+    
+    await batch.commit();
+  }
 };

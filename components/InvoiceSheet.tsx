@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Invoice, InvoiceItem, COMPANY_INFO, Product, CompanySettings, Customer, PricingRule } from '../types';
 import { formatCurrency, calculateTotal, generateId, generateCustomerSerialNumber, findPriceForProduct, getMonthKey } from '../utils/helpers';
 import SignatureCanvas from './SignatureCanvas';
@@ -46,6 +46,24 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
   const [linkCopied, setLinkCopied] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
 
+  // Determine template type based on customer tier
+  const currentCustomer = customers.find(c => c.name === localInvoice.customerName);
+  const customerTier = currentCustomer?.customerTier || currentCustomer?.priceCategory;
+  const isKangshitingTemplate = customerTier === 'kangshiting';
+
+  // Get service client history from invoices
+  const serviceClientHistory = useMemo(() => {
+    if (!isKangshitingTemplate) return [];
+    const history = new Set<string>();
+    invoices
+      .filter(inv => inv.customerName === localInvoice.customerName && inv.serviceClient)
+      .forEach(inv => {
+        if (inv.serviceClient) history.add(inv.serviceClient);
+      });
+    return Array.from(history).sort();
+  }, [invoices, localInvoice.customerName, isKangshitingTemplate]);
+
+
   // Sync local state when props change
   useEffect(() => {
     setLocalInvoice(invoice);
@@ -57,6 +75,7 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
       setIsSigningMode(true);
     }
   }, [isRemoteSignMode, localInvoice.signatureBase64, isEditing]);
+
 
   const handleInputChange = (field: keyof Invoice, value: any) => {
     if (!isEditing && field !== 'signatureBase64') return;
@@ -133,7 +152,7 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                  customer?.priceCategory,
                  pricingRules
                );
-               updatedItem.unitPrice = price !== null ? price : (selectedProduct.basePrice || (selectedProduct as any).price || 0);
+               updatedItem.unitPrice = price !== null ? price : (selectedProduct.price || 0);
                updatedItem.amount = (item.quantity || 1) * updatedItem.unitPrice;
            }
         }
@@ -216,7 +235,25 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
     
     // Create a clone for PDF generation to clean up UI elements
     const clone = element.cloneNode(true) as HTMLElement;
-    clone.classList.remove('shadow-xl', 'rounded-sm'); 
+    clone.classList.remove('shadow-xl', 'rounded-sm');
+    
+    // 計算內容實際高度（像素）- 用於動態設置 PDF 尺寸
+    const rect = element.getBoundingClientRect();
+    const contentHeightPx = rect.height || element.scrollHeight;
+    const contentWidthPx = rect.width || element.scrollWidth;
+    
+    // 將像素轉換為 mm（假設 96 DPI: 1mm ≈ 3.7795px）
+    const contentHeightMm = contentHeightPx / 3.7795;
+    const contentWidthMm = contentWidthPx / 3.7795;
+    
+    // PDF 寬度固定為 A4 橫式寬度，高度根據內容動態調整
+    const PDF_WIDTH_MM = 297;
+    const MARGIN_MM = 2;
+    // 計算 PDF 高度：內容高度 + 邊距
+    const pdfHeight = Math.max(contentHeightMm + (MARGIN_MM * 2), 50); // 最小高度 50mm
+    
+    // 計算 canvas 縮放比例（保持高解析度）
+    const canvasScale = 2; 
     
     // Remove UI elements that shouldn't appear in PDF
     const actionBar = clone.querySelector('.print\\:hidden');
@@ -272,8 +309,9 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
     
     // Ensure background is white for PDF and allow full height
     clone.style.backgroundColor = '#ffffff';
-    clone.style.width = '210mm'; // A4 width
-    clone.style.maxWidth = '210mm';
+       // 所有對帳單都使用橫式尺寸
+       clone.style.width = '297mm'; // A4 landscape width
+       clone.style.maxWidth = '297mm';
     clone.style.height = 'auto'; // Allow height to expand with content
     clone.style.minHeight = 'auto';
     clone.style.position = 'relative';
@@ -374,8 +412,8 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
     });
     
     // Improve text rendering quality
-    clone.style.webkitFontSmoothing = 'antialiased';
-    clone.style.mozOsxFontSmoothing = 'grayscale';
+    (clone.style as any).webkitFontSmoothing = 'antialiased';
+    (clone.style as any).mozOsxFontSmoothing = 'grayscale';
 
     // Generate PDF filename: 客戶名稱_流水編號_月份
     const monthKey = getMonthKey(localInvoice.date).replace('-', ''); // Format: YYYYMM
@@ -383,14 +421,14 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
     const pdfFilename = `${fileNamePrefix}_${localInvoice.serialNumber}_${monthKey}`;
     
     const opt = {
-      margin:       5,
+      margin:       2, // 減少邊距以獲得更多空間
       filename:     pdfFilename,
       image:        { 
         type: 'png', // Use PNG instead of JPEG for better quality
         quality: 1.0 
       },
       html2canvas:  { 
-        scale: 2, // Balanced scale for quality and performance
+        scale: canvasScale, // 根據內容動態調整縮放比例，確保符合一頁
         useCORS: true,
         logging: false,
         letterRendering: true, // Better text rendering
@@ -404,24 +442,47 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
           // Fix styles in the cloned document
           const clonedElement = clonedDoc.body.firstElementChild as HTMLElement;
           if (clonedElement) {
-            clonedElement.style.width = '210mm';
-            clonedElement.style.maxWidth = '210mm';
+            // 計算實際內容尺寸
+            const contentHeightPx = clonedElement.scrollHeight || clonedElement.offsetHeight || element.scrollHeight;
+            const contentWidthPx = clonedElement.scrollWidth || clonedElement.offsetWidth || element.scrollWidth;
+            
+            // PDF 寬度固定為 A4 橫式寬度
+            const PDF_WIDTH_MM = 297;
+            
+            // 設置容器尺寸（不限制高度，讓內容自然展開）
+            clonedElement.style.width = `${PDF_WIDTH_MM}mm`;
+            clonedElement.style.maxWidth = `${PDF_WIDTH_MM}mm`;
+            clonedElement.style.margin = '0 auto';
+            clonedElement.style.display = 'block';
             clonedElement.style.height = 'auto';
             clonedElement.style.minHeight = 'auto';
-            clonedElement.style.maxHeight = 'none';
-            clonedElement.style.margin = '0 auto';
-            clonedElement.style.transform = 'none';
-            clonedElement.style.webkitTransform = 'none';
+            clonedElement.style.maxHeight = 'none'; // 不限制最大高度
             clonedElement.style.overflow = 'visible';
+            
+            // 強制單頁：設置所有元素避免分頁
+            clonedElement.style.pageBreakInside = 'avoid';
+            clonedElement.style.pageBreakBefore = 'avoid';
+            clonedElement.style.pageBreakAfter = 'avoid';
+            clonedElement.style.breakInside = 'avoid';
+            clonedElement.style.breakBefore = 'avoid';
+            clonedElement.style.breakAfter = 'avoid';
           }
           
-          // Ensure body and html elements don't restrict height
+          // Ensure body and html elements don't restrict height and support centering
           clonedDoc.body.style.height = 'auto';
           clonedDoc.body.style.minHeight = 'auto';
           clonedDoc.body.style.maxHeight = 'none';
+          clonedDoc.body.style.margin = '0';
+          clonedDoc.body.style.padding = '0';
+          clonedDoc.body.style.display = 'flex';
+          clonedDoc.body.style.flexDirection = 'column';
+          clonedDoc.body.style.alignItems = 'center';
+          clonedDoc.body.style.justifyContent = 'flex-start';
           clonedDoc.documentElement.style.height = 'auto';
           clonedDoc.documentElement.style.minHeight = 'auto';
           clonedDoc.documentElement.style.maxHeight = 'none';
+          clonedDoc.documentElement.style.margin = '0';
+          clonedDoc.documentElement.style.padding = '0';
           
           // Ensure tables are properly sized and all columns visible
           const clonedTables = clonedDoc.querySelectorAll('table');
@@ -472,7 +533,7 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
             }
           });
           
-          // Remove any overflow hidden or auto
+          // Remove any overflow hidden or auto and prevent page breaks
           const allElements = clonedDoc.querySelectorAll('*');
           allElements.forEach((el) => {
             const htmlEl = el as HTMLElement;
@@ -483,6 +544,15 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
               htmlEl.style.overflowX = 'visible';
               htmlEl.style.overflowY = 'visible';
             }
+            // 強制單頁：設置所有元素避免分頁
+            htmlEl.style.pageBreakInside = 'avoid';
+            htmlEl.style.pageBreakBefore = 'avoid';
+            htmlEl.style.pageBreakAfter = 'avoid';
+            htmlEl.style.breakInside = 'avoid';
+            htmlEl.style.breakBefore = 'avoid';
+            htmlEl.style.breakAfter = 'avoid';
+            // 移除 break-inside-avoid 類別（已經通過 style 設置）
+            htmlEl.classList.remove('break-inside-avoid');
           });
           
           // Ensure body and html don't hide overflow
@@ -492,14 +562,21 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
       },
       jsPDF:        { 
         unit: 'mm', 
-        format: 'a4', 
-        orientation: 'portrait',
+        format: [297, pdfHeight], // 動態設置高度以符合內容，寬度固定為 A4 橫式寬度
+        orientation: 'landscape', // 所有對帳單都使用橫式
         compress: true
       },
-      pagebreak:    { mode: ['css', 'legacy'] } // Allow page breaks for long content
+      pagebreak:    { 
+        mode: [], // 禁用自動分頁
+        avoid: ['*'], // 避免所有元素分頁
+        before: [], // 不在任何元素前分頁
+        after: [], // 不在任何元素後分頁
+        inside: [] // 不在任何元素內分頁
+      }
     };
 
     try {
+      // 使用 html2pdf 生成 PDF，確保單頁輸出
       await html2pdf().set(opt).from(clone).save();
     } catch (error) {
       console.error('PDF generation error:', error);
@@ -618,9 +695,9 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
 
       {/* The Paper Sheet */}
       <div 
-        ref={sheetRef} 
-        className="bg-white p-6 md:p-12 max-w-[210mm] mx-auto min-h-[297mm] shadow-xl print:shadow-none print:w-full print:max-w-none print:p-0 relative text-slate-900"
-        style={{ fontFamily: "'Noto Sans TC', sans-serif" }} // Enforce standard font for document
+        ref={sheetRef}
+        className="bg-white p-6 md:p-12 mx-auto shadow-xl print:shadow-none print:w-full print:max-w-none print:p-0 relative text-slate-900 w-[297mm] min-w-[297mm] max-w-[297mm] min-h-[210mm] landscape-template"
+        style={{ width: '297mm', minWidth: '297mm', maxWidth: '297mm' }}
       >
         
                {/* Invoice Header with Logo - Compact Design */}
@@ -756,8 +833,8 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
               </div>
           </div>
           
-          {/* Row 3: Tax ID and Contact Person */}
-          <div className="flex flex-col md:flex-row md:items-end gap-2 md:gap-4">
+          {/* Row 3: Tax ID, Contact Person, and Service Client (for Kangshiting) */}
+          <div className={`flex flex-col md:flex-row md:items-end gap-2 md:gap-4 ${isKangshitingTemplate ? 'grid grid-cols-3' : ''}`}>
               <div className="flex-1 flex items-end border-b border-slate-300 pb-1 min-w-0">
                   <span className="font-bold text-slate-700 whitespace-nowrap mr-2">統編:</span>
                   {isEditing ? (
@@ -813,6 +890,48 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                       <span className="flex-1 px-2 text-sm text-slate-900">{localInvoice.contactPerson || '-'}</span>
                   )}
               </div>
+              {/* Service Client field - only for Kangshiting template */}
+              {isKangshitingTemplate && (
+                  <div className="flex-1 flex items-end border-b border-slate-300 pb-1 min-w-0">
+                      <span className="font-bold text-slate-700 whitespace-nowrap mr-2">服務客戶:</span>
+                      {isEditing ? (
+                          <div className="flex-1 relative group">
+                              <input 
+                                  type="text" 
+                                  value={localInvoice.serviceClient || ''}
+                                  onChange={(e) => handleInputChange('serviceClient', e.target.value)}
+                                  className="w-full outline-none px-2 bg-brand-50 hover:bg-brand-100 transition-colors rounded text-slate-900"
+                                  placeholder="選擇或輸入服務客戶"
+                                  autoComplete="off"
+                              />
+                              {/* Custom Dropdown for Service Client */}
+                              {serviceClientHistory.length > 0 && (
+                                  <div className="hidden group-focus-within:block absolute top-full left-0 w-full z-50 bg-white border border-slate-200 shadow-lg max-h-48 overflow-y-auto rounded-b-md">
+                                    {serviceClientHistory
+                                      .filter(sc => !localInvoice.serviceClient || sc.toLowerCase().includes((localInvoice.serviceClient || '').toLowerCase()))
+                                      .map((sc, i) => (
+                                          <div 
+                                            key={i}
+                                            className="px-3 py-2 hover:bg-brand-50 cursor-pointer text-sm text-slate-700 border-b border-slate-50 last:border-0"
+                                            onMouseDown={(e) => {
+                                              e.preventDefault(); // Prevent input blur
+                                              handleInputChange('serviceClient', sc);
+                                            }}
+                                          >
+                                            {sc}
+                                          </div>
+                                      ))}
+                                      {serviceClientHistory.filter(sc => !localInvoice.serviceClient || sc.toLowerCase().includes((localInvoice.serviceClient || '').toLowerCase())).length === 0 && (
+                                        <div className="px-3 py-2 text-xs text-slate-400 italic">無相符服務客戶</div>
+                                      )}
+                                  </div>
+                              )}
+                          </div>
+                      ) : (
+                          <span className="flex-1 px-2 text-sm text-slate-900">{localInvoice.serviceClient || '-'}</span>
+                      )}
+                  </div>
+              )}
           </div>
         </div>
 

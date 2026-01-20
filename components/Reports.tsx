@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Invoice, CustomerStat, CompanySettings, RevenueTarget, Customer } from '../types';
 import { 
   getMonthKey, 
@@ -12,7 +12,7 @@ import {
   calculateGrowthRate,
   formatGrowthRate
 } from '../utils/helpers';
-import { Calendar, DollarSign, TrendingUp, FileText, BarChart3, PieChart, ChevronDown, ChevronLeft, Lightbulb, Sparkles, Award, ArrowRight } from 'lucide-react';
+import { Calendar, DollarSign, TrendingUp, FileText, BarChart3, PieChart, ChevronDown, ChevronLeft, Lightbulb, Sparkles, Award, ArrowRight, Download } from 'lucide-react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, ArcElement } from 'chart.js';
 import { Bar, Line, Pie } from 'react-chartjs-2';
 
@@ -49,6 +49,15 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
   const [selectedQuarter, setSelectedQuarter] = useState<string>('');
   const [selectedYear, setSelectedYear] = useState<string>('');
   const [selectedCustomerForChart, setSelectedCustomerForChart] = useState<string>('');
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+  
+  // Chart refs for PDF export
+  const customerChartRef = useRef<any>(null);
+  const dailyChartRef = useRef<any>(null);
+  const serviceClientChartRef = useRef<any>(null);
+  const contactPersonChartRef = useRef<any>(null);
+  const monthlyTrendChartRef = useRef<any>(null);
+  const quarterlyChartRef = useRef<any>(null);
 
   const availableMonths = useMemo(() => {
     const months = new Set<string>();
@@ -72,7 +81,11 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
   }, [availableQuarters, availableYears, selectedQuarter, selectedYear]);
 
   useEffect(() => {
+    // 當切換報表類型時，清空客戶選擇
     if (reportType === 'month') {
+      // 月報表也允許選擇客戶，不清空
+      // setSelectedCustomerForChart('');
+    } else {
       setSelectedCustomerForChart('');
     }
   }, [reportType, selectedQuarter, selectedYear]);
@@ -115,14 +128,145 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
 
   const customerRevenueDistribution = useMemo(() => {
     if (!customerStats || customerStats.length === 0) return null;
-    if (totalRevenue === 0) return null;
     
-    return customerStats.map(cust => ({
+    // 如果選擇了特定客戶，只顯示該客戶
+    let statsToShow = customerStats;
+    let revenueToCalculate = totalRevenue;
+    
+    if (selectedCustomerForChart) {
+      const selectedCustomerStat = customerStats.find(c => c.name === selectedCustomerForChart);
+      if (!selectedCustomerStat) return null;
+      statsToShow = [selectedCustomerStat];
+      revenueToCalculate = selectedCustomerStat.totalAmount;
+    }
+    
+    if (revenueToCalculate === 0) return null;
+    
+    return statsToShow.map(cust => ({
       name: cust.name,
       revenue: cust.totalAmount,
-      percentage: (cust.totalAmount / totalRevenue) * 100
+      percentage: (cust.totalAmount / revenueToCalculate) * 100,
+      count: cust.invoiceCount || 0
     })).sort((a, b) => b.revenue - a.revenue);
-  }, [customerStats, totalRevenue]);
+  }, [customerStats, totalRevenue, selectedCustomerForChart]);
+
+  // 服務客戶分析（僅當選擇康士藤客戶時顯示）
+  const serviceClientDistribution = useMemo(() => {
+    // 在月報表、季報表或年報表且選擇了客戶時計算
+    if (!selectedCustomerForChart) return null;
+    
+    // 檢查選中的客戶是否為康士藤客戶
+    const selectedCustomer = customers.find(c => c.name === selectedCustomerForChart);
+    const isKangshiting = selectedCustomer && 
+      ((selectedCustomer.customerTier || selectedCustomer.priceCategory) === 'kangshiting');
+    
+    if (!isKangshiting) return null;
+    
+    // 篩選出該康士藤客戶的單據（僅包含有服務客戶欄位的單據）
+    const customerInvoices = filteredInvoices.filter(inv => 
+      inv.customerName === selectedCustomerForChart && inv.serviceClient
+    );
+    
+    if (customerInvoices.length === 0) return null;
+    
+    // 計算該客戶的總營收
+    const customerTotalRevenue = filteredInvoices
+      .filter(inv => inv.customerName === selectedCustomerForChart)
+      .reduce((sum, inv) => sum + inv.totalAmount, 0);
+    
+    if (customerTotalRevenue === 0) return null;
+    
+    // 按服務客戶分組統計
+    const serviceClientStats: Record<string, { name: string; revenue: number; count: number }> = {};
+    
+    customerInvoices.forEach(inv => {
+      const serviceClient = inv.serviceClient || '未指定';
+      if (!serviceClientStats[serviceClient]) {
+        serviceClientStats[serviceClient] = {
+          name: serviceClient,
+          revenue: 0,
+          count: 0
+        };
+      }
+      serviceClientStats[serviceClient].revenue += inv.totalAmount;
+      serviceClientStats[serviceClient].count += 1;
+    });
+    
+    // 轉換為陣列並計算佔比
+    const distribution = Object.values(serviceClientStats)
+      .map(stat => ({
+        name: stat.name,
+        revenue: stat.revenue,
+        count: stat.count,
+        percentage: (stat.revenue / customerTotalRevenue) * 100
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+    
+    return {
+      distribution,
+      totalRevenue: customerTotalRevenue,
+      totalInvoices: customerInvoices.length,
+      customerName: selectedCustomerForChart
+    };
+  }, [reportType, selectedMonth, selectedCustomerForChart, filteredInvoices, customers]);
+
+  // 下單人員分析（僅當選擇康士藤客戶時顯示）
+  const contactPersonDistribution = useMemo(() => {
+    // 在月報表、季報表或年報表且選擇了客戶時計算
+    if (!selectedCustomerForChart) return null;
+    
+    // 檢查選中的客戶是否為康士藤客戶
+    const selectedCustomer = customers.find(c => c.name === selectedCustomerForChart);
+    const isKangshiting = selectedCustomer && 
+      ((selectedCustomer.customerTier || selectedCustomer.priceCategory) === 'kangshiting');
+    
+    if (!isKangshiting) return null;
+    
+    // 篩選出該康士藤客戶的所有單據
+    const customerInvoices = filteredInvoices.filter(inv => 
+      inv.customerName === selectedCustomerForChart
+    );
+    
+    if (customerInvoices.length === 0) return null;
+    
+    // 計算該客戶的總營收
+    const customerTotalRevenue = customerInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+    
+    if (customerTotalRevenue === 0) return null;
+    
+    // 按下單人員分組統計
+    const contactPersonStats: Record<string, { name: string; revenue: number; count: number }> = {};
+    
+    customerInvoices.forEach(inv => {
+      const contactPerson = inv.contactPerson || '未指定';
+      if (!contactPersonStats[contactPerson]) {
+        contactPersonStats[contactPerson] = {
+          name: contactPerson,
+          revenue: 0,
+          count: 0
+        };
+      }
+      contactPersonStats[contactPerson].revenue += inv.totalAmount;
+      contactPersonStats[contactPerson].count += 1;
+    });
+    
+    // 轉換為陣列並計算佔比
+    const distribution = Object.values(contactPersonStats)
+      .map(stat => ({
+        name: stat.name,
+        revenue: stat.revenue,
+        count: stat.count,
+        percentage: (stat.revenue / customerTotalRevenue) * 100
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+    
+    return {
+      distribution,
+      totalRevenue: customerTotalRevenue,
+      totalInvoices: customerInvoices.length,
+      customerName: selectedCustomerForChart
+    };
+  }, [reportType, selectedMonth, selectedCustomerForChart, filteredInvoices, customers]);
 
   const growthRateData = useMemo(() => {
     if (reportType === 'quarter' && selectedQuarter) {
@@ -174,6 +318,12 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
   }, [reportType, selectedQuarter, selectedYear, invoices]);
 
   const availableCustomersForChart = useMemo(() => {
+    if (reportType === 'month' && selectedMonth) {
+      const monthInvoices = invoices.filter(inv => getMonthKey(inv.date) === selectedMonth);
+      const customerNames = new Set(monthInvoices.map(inv => inv.customerName).filter(Boolean));
+      return Array.from(customerNames).sort();
+    }
+    
     if (reportType === 'quarter' && selectedQuarter) {
       const { year, quarter } = parseQuarterKey(selectedQuarter);
       const quarterMonths = getQuarterMonths(quarter, year);
@@ -189,7 +339,7 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
     }
     
     return [];
-  }, [reportType, selectedQuarter, selectedYear, invoices]);
+  }, [reportType, selectedMonth, selectedQuarter, selectedYear, invoices]);
 
   // Monthly breakdown for quarter/year reports (not for month reports)
   const monthlyBreakdown = useMemo(() => {
@@ -247,8 +397,14 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
       count: 0
     }));
 
+    // 根據選中的客戶過濾單據
+    let invoicesToProcess = filteredInvoices;
+    if (selectedCustomerForChart) {
+      invoicesToProcess = filteredInvoices.filter(inv => inv.customerName === selectedCustomerForChart);
+    }
+
     // 填入發票數據
-    filteredInvoices.forEach(inv => {
+    invoicesToProcess.forEach(inv => {
       const date = new Date(inv.date);
       // 確保日期是屬於選定月份 (雙重檢查)
       if (date.getMonth() + 1 === month && date.getFullYear() === year) {
@@ -261,7 +417,7 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
     });
 
     return dailyData;
-  }, [reportType, selectedMonth, filteredInvoices]);
+  }, [reportType, selectedMonth, filteredInvoices, selectedCustomerForChart]);
 
   // Previous year monthly breakdown (similar logic to Dashboard)
   const previousYearMonthlyBreakdown = useMemo(() => {
@@ -488,6 +644,592 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
     return null;
   }, [reportType, selectedYear, invoices, revenueTargets]);
 
+  // Excel Export Function
+  const handleExportExcel = () => {
+    try {
+      // 計算統計數據
+      const totalRevenue = filteredInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+      const totalInvoices = filteredInvoices.length;
+
+      // 獲取時間範圍標籤
+      let timeLabel = '';
+      if (reportType === 'month') {
+        timeLabel = selectedMonth;
+      } else if (reportType === 'quarter' && selectedQuarter) {
+        const { year, quarter } = parseQuarterKey(selectedQuarter);
+        timeLabel = `${year}年 Q${quarter}`;
+      } else if (reportType === 'year' && selectedYear) {
+        timeLabel = `${selectedYear}年`;
+      }
+
+      let excelHTML = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+        <head>
+          <meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8">
+          <title>營收報表數據</title>
+          <style>
+            body { 
+              font-family: 'Microsoft JhengHei', 'Noto Sans TC', Arial, sans-serif; 
+              margin: 20px;
+              background-color: #ffffff;
+            }
+            h1 { 
+              font-size: 24px; 
+              font-weight: bold; 
+              color: #1e293b; 
+              margin-bottom: 10px;
+              text-align: center;
+            }
+            h2 { 
+              font-size: 18px; 
+              font-weight: bold; 
+              color: #1e293b; 
+              margin-top: 30px; 
+              margin-bottom: 15px;
+              padding-bottom: 8px;
+              border-bottom: 2px solid #f97316;
+            }
+            p { 
+              text-align: center; 
+              color: #64748b; 
+              font-size: 14px;
+              margin-bottom: 20px;
+            }
+            table { 
+              border-collapse: collapse; 
+              width: 100%; 
+              margin-bottom: 20px;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }
+            th { 
+              background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); 
+              color: white; 
+              font-weight: bold; 
+              padding: 12px 10px; 
+              border: 1px solid #ea580c; 
+              text-align: center;
+              font-size: 13px;
+            }
+            td { 
+              padding: 10px; 
+              border: 1px solid #e2e8f0; 
+              font-size: 12px;
+            }
+            tr:nth-child(even) { 
+              background-color: #f8fafc; 
+            }
+            tr:hover {
+              background-color: #fff7ed;
+            }
+            .number-cell {
+              text-align: right;
+              font-family: 'Courier New', monospace;
+            }
+            .percentage-cell {
+              text-align: right;
+              font-weight: 600;
+              color: #f97316;
+            }
+            .center-cell {
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>營收報表數據 - ${timeLabel}</h1>
+          <p><strong>總營收:</strong> ${formatCurrency(totalRevenue)} &nbsp;&nbsp;|&nbsp;&nbsp; <strong>單據數量:</strong> ${totalInvoices} 筆</p>
+      `;
+
+      // 客戶營收統計表
+      if (customerRevenueDistribution && customerRevenueDistribution.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">客戶營收統計</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>客戶名稱</th>
+                <th>營收金額</th>
+                <th>占比 (%)</th>
+                <th>單據數量</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        customerRevenueDistribution.forEach(customer => {
+          excelHTML += `
+            <tr>
+              <td style="font-weight: 500;">${customer.name}</td>
+              <td class="number-cell">${formatCurrency(customer.revenue)}</td>
+              <td class="percentage-cell">${customer.percentage.toFixed(2)}%</td>
+              <td class="center-cell">${customer.count || 0} 筆</td>
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      // 服務客戶分析表（如有）
+      if (serviceClientDistribution && serviceClientDistribution.distribution.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">${serviceClientDistribution.customerName} - 服務客戶分析</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>服務客戶</th>
+                <th>營收金額</th>
+                <th>占比 (%)</th>
+                <th>單據數量</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        serviceClientDistribution.distribution.forEach(sc => {
+          excelHTML += `
+            <tr>
+              <td>${sc.name}</td>
+              <td style="text-align: right;">${formatCurrency(sc.revenue)}</td>
+              <td style="text-align: right;">${sc.percentage.toFixed(2)}%</td>
+              <td style="text-align: center;">${sc.count} 筆</td>
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      // 下單人員分析表（如有）
+      if (contactPersonDistribution && contactPersonDistribution.distribution.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">${contactPersonDistribution.customerName} - 下單人員分析</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>下單人員</th>
+                <th>營收金額</th>
+                <th>占比 (%)</th>
+                <th>單據數量</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        contactPersonDistribution.distribution.forEach(cp => {
+          excelHTML += `
+            <tr>
+              <td style="font-weight: 500;">${cp.name}</td>
+              <td class="number-cell">${formatCurrency(cp.revenue)}</td>
+              <td class="percentage-cell" style="color: #16a34a;">${cp.percentage.toFixed(2)}%</td>
+              <td class="center-cell">${cp.count || 0} 筆</td>
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      // 季度/年度月份趨勢表（如有）
+      if ((reportType === 'quarter' || reportType === 'year') && monthlyBreakdown && monthlyBreakdown.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">${reportType === 'quarter' ? '季度' : '年度'}月份趨勢</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>月份</th>
+                <th>本期營收</th>
+                ${previousYearMonthlyBreakdown ? '<th>去年同期</th><th>成長率 (%)</th>' : ''}
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        monthlyBreakdown.forEach((item, index) => {
+          const prevItem = previousYearMonthlyBreakdown ? previousYearMonthlyBreakdown[index] : null;
+          const prevRevenue = prevItem ? prevItem.revenue : 0;
+          const growthRate = calculateGrowthRate(item.revenue, prevRevenue);
+          const growthColor = growthRate > 0 ? '#10b981' : growthRate < 0 ? '#ef4444' : '#64748b';
+          excelHTML += `
+            <tr>
+              <td style="font-weight: 500;">${item.month}</td>
+              <td class="number-cell">${formatCurrency(item.revenue)}</td>
+              ${previousYearMonthlyBreakdown ? `
+                <td class="number-cell">${prevRevenue > 0 ? formatCurrency(prevRevenue) : '-'}</td>
+                <td class="percentage-cell" style="color: ${growthColor};">${prevRevenue > 0 ? (growthRate > 0 ? '+' : '') + growthRate.toFixed(2) + '%' : '-'}</td>
+              ` : ''}
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      // 年度季度趨勢表（如有）
+      if (reportType === 'year' && quarterlyBreakdown && quarterlyBreakdown.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">年度季度趨勢</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>季度</th>
+                <th>營收金額</th>
+                <th>單據數量</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        quarterlyBreakdown.forEach(item => {
+          excelHTML += `
+            <tr>
+              <td style="font-weight: 500;">${item.quarter}</td>
+              <td class="number-cell">${formatCurrency(item.revenue)}</td>
+              <td class="center-cell">${item.count || 0} 筆</td>
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      // 每日營收明細表（月報表）- 放在最下方
+      if (reportType === 'month' && dailyBreakdown && dailyBreakdown.length > 0) {
+        excelHTML += `
+          <h2 style="margin-top: 30px; color: #1e293b;">每日營收明細</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>營收金額</th>
+                <th>單據數量</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        dailyBreakdown.forEach(day => {
+          excelHTML += `
+            <tr>
+              <td style="font-weight: 500;">${selectedMonth}-${String(day.day).padStart(2, '0')}</td>
+              <td class="number-cell">${formatCurrency(day.revenue)}</td>
+              <td class="center-cell">${day.count || 0} 筆</td>
+            </tr>
+          `;
+        });
+        excelHTML += `
+            </tbody>
+          </table>
+        `;
+      }
+
+      excelHTML += `
+        </body>
+        </html>
+      `;
+
+      const blob = new Blob([excelHTML], { type: 'application/vnd.ms-excel' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `營收報表數據_${timeLabel.replace(/[\/\\:*?"<>|]/g, '_')}.xls`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      console.error('Excel export error:', error);
+      alert('匯出 Excel 時發生錯誤，請稍後再試。');
+    }
+  };
+
+  // PDF Export Function (只包含圖表)
+  const handleExportPDF = async () => {
+    setIsExportingPDF(true);
+    try {
+      const html2pdf = (window as any).html2pdf;
+      if (!html2pdf) {
+        alert("PDF 產生器尚未載入，請稍後再試或重新整理頁面。");
+        setIsExportingPDF(false);
+        return;
+      }
+
+      // 計算統計數據
+      const totalRevenue = filteredInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+      const totalInvoices = filteredInvoices.length;
+
+      // 獲取時間範圍標籤
+      let timeLabel = '';
+      if (reportType === 'month') {
+        timeLabel = selectedMonth;
+      } else if (reportType === 'quarter' && selectedQuarter) {
+        const { year, quarter } = parseQuarterKey(selectedQuarter);
+        timeLabel = `${year}年 Q${quarter}`;
+      } else if (reportType === 'year' && selectedYear) {
+        timeLabel = `${selectedYear}年`;
+      }
+
+      // 獲取圖表圖片（如果圖表存在）
+      const getChartImage = (chartRef: React.RefObject<any>): Promise<string | null> => {
+        return new Promise((resolve) => {
+          if (!chartRef.current) {
+            resolve(null);
+            return;
+          }
+          try {
+            // react-chartjs-2 的 ref 結構可能是 chartInstance 或直接是 chart 實例
+            let chartInstance = null;
+            if (chartRef.current.chartInstance) {
+              chartInstance = chartRef.current.chartInstance;
+            } else if (chartRef.current.chart) {
+              chartInstance = chartRef.current.chart;
+            } else if (chartRef.current && typeof chartRef.current.toBase64Image === 'function') {
+              chartInstance = chartRef.current;
+            }
+            
+            if (chartInstance && typeof chartInstance.toBase64Image === 'function') {
+              const image = chartInstance.toBase64Image('image/png', 1);
+              resolve(image);
+            } else {
+              resolve(null);
+            }
+          } catch (e) {
+            console.error('Error getting chart image:', e);
+            resolve(null);
+          }
+        });
+      };
+
+      // 等待圖表渲染完成
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 獲取所有圖表圖片
+      const customerChartImg = await getChartImage(customerChartRef);
+      const dailyChartImg = await getChartImage(dailyChartRef);
+      const serviceClientChartImg = await getChartImage(serviceClientChartRef);
+      const contactPersonChartImg = await getChartImage(contactPersonChartRef);
+      const monthlyTrendChartImg = await getChartImage(monthlyTrendChartRef);
+      const quarterlyChartImg = await getChartImage(quarterlyChartRef);
+
+      // 創建 PDF HTML 內容（只包含圖表，簡化排版）
+      let pdfHTML = `
+        <div style="font-family: 'Noto Sans TC', 'Microsoft JhengHei', Arial, sans-serif; padding: 20px; width: 100%; background: white; color: #1e293b; box-sizing: border-box;">
+          <div style="text-align: center; margin-bottom: 20px; border-bottom: 3px solid #f97316; padding-bottom: 15px;">
+            <h1 style="font-size: 24px; font-weight: bold; color: #1e293b; margin: 0;">營收報表圖表</h1>
+            <p style="font-size: 16px; color: #64748b; margin: 8px 0 0 0;">${timeLabel}</p>
+          </div>
+      `;
+
+      // 客戶營收占比圖表（僅圖表，無表格）
+      if (customerRevenueDistribution && customerRevenueDistribution.length > 0 && customerChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              ${selectedCustomerForChart ? selectedCustomerForChart + ' - ' : ''}客戶營收占比
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${customerChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      // 每日營收走勢圖表（僅月報表，僅圖表）
+      if (reportType === 'month' && dailyBreakdown && dailyBreakdown.length > 0 && dailyChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              ${selectedCustomerForChart ? selectedCustomerForChart + ' - ' : ''}每日營收走勢
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${dailyChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      // 服務客戶分析圖表（僅圖表）
+      if (serviceClientDistribution && serviceClientDistribution.distribution.length > 0 && serviceClientChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              ${serviceClientDistribution.customerName} - 服務客戶營收占比
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${serviceClientChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      // 下單人員分析圖表（僅圖表）
+      if (contactPersonDistribution && contactPersonDistribution.distribution.length > 0 && contactPersonChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              ${contactPersonDistribution.customerName} - 下單人員營收占比
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${contactPersonChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      // 季度/年度月份趨勢圖表（僅圖表）
+      if ((reportType === 'quarter' || reportType === 'year') && monthlyBreakdown && monthlyBreakdown.length > 0 && monthlyTrendChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              ${reportType === 'quarter' ? '季度月份趨勢' : '年度月份趨勢'}
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${monthlyTrendChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      // 年度季度趨勢圖表（僅圖表）
+      if (reportType === 'year' && quarterlyBreakdown && quarterlyBreakdown.length > 0 && quarterlyChartImg) {
+        pdfHTML += `
+          <div style="page-break-inside: avoid; margin-bottom: 30px; break-inside: avoid;">
+            <h2 style="font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 15px; text-align: center;">
+              年度季度趨勢
+            </h2>
+            <div style="text-align: center; margin: 20px 0;">
+              <img src="${quarterlyChartImg}" style="max-width: 90%; height: auto; display: block; margin: 0 auto;" />
+            </div>
+          </div>
+        `;
+      }
+
+      pdfHTML += `
+        </div>
+      `;
+
+      // 新方法：創建一個臨時的可見容器，確保 html2canvas 能正確捕獲
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = pdfHTML;
+      
+      // 設置樣式 - 關鍵：元素必須在視窗內且可見
+      Object.assign(tempDiv.style, {
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        width: '210mm',
+        minHeight: '297mm',
+        backgroundColor: 'white',
+        color: '#1e293b',
+        fontFamily: "'Noto Sans TC', 'Microsoft JhengHei', Arial, sans-serif",
+        zIndex: '999999',
+        visibility: 'visible',
+        opacity: '1',
+        pointerEvents: 'none',
+        overflow: 'auto',
+        boxSizing: 'border-box',
+        padding: '20px',
+        // 確保元素在視窗內
+        transform: 'translateZ(0)', // 強制 GPU 加速
+      });
+      
+      document.body.appendChild(tempDiv);
+
+      // 強制重排
+      void tempDiv.offsetHeight;
+      void tempDiv.scrollHeight;
+
+      // 等待內容渲染
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // 檢查內容
+      const hasContent = tempDiv.textContent && tempDiv.textContent.trim().length > 0;
+      if (!hasContent) {
+        alert('報表內容為空，無法匯出 PDF。請確認已選擇時間範圍並有數據。');
+        document.body.removeChild(tempDiv);
+        setIsExportingPDF(false);
+        return;
+      }
+
+      // 載入圖片
+      const images = tempDiv.querySelectorAll('img');
+      if (images.length > 0) {
+        await Promise.all(Array.from(images).map((img) => {
+          return new Promise((resolve) => {
+            if (img.complete && img.naturalWidth > 0) {
+              resolve(null);
+            } else {
+              img.onload = () => resolve(null);
+              img.onerror = () => resolve(null);
+              setTimeout(() => resolve(null), 3000);
+            }
+          });
+        }));
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 獲取實際尺寸
+      const rect = tempDiv.getBoundingClientRect();
+      const width = Math.max(tempDiv.scrollWidth || 794, 794);
+      const height = Math.max(tempDiv.scrollHeight || 1123, 1123);
+
+      console.log('Element dimensions:', { 
+        width, 
+        height, 
+        scrollWidth: tempDiv.scrollWidth, 
+        scrollHeight: tempDiv.scrollHeight,
+        rect: { width: rect.width, height: rect.height }
+      });
+
+      const opt = {
+        margin: [10, 10, 10, 10],
+        filename: `營收報表_${timeLabel.replace(/[\/\\:*?"<>|]/g, '_')}.pdf`,
+        image: { type: 'png', quality: 0.98 },
+        html2canvas: { 
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          allowTaint: false,
+          backgroundColor: '#ffffff',
+          width: width,
+          height: height,
+          x: 0,
+          y: 0,
+          scrollX: 0,
+          scrollY: 0,
+          useCORS: true,
+        },
+        jsPDF: { 
+          unit: 'mm', 
+          format: 'a4', 
+          orientation: 'portrait' 
+        },
+        pagebreak: { mode: ['avoid-all', 'css'], avoid: ['img', '.page-break-avoid'] }
+      };
+
+      try {
+        console.log('Starting PDF generation...');
+        await html2pdf().set(opt).from(tempDiv).save();
+        console.log('PDF generation completed');
+      } catch (error) {
+        console.error('PDF generation error:', error);
+        alert('匯出 PDF 時發生錯誤：' + (error instanceof Error ? error.message : String(error)));
+        throw error;
+      } finally {
+        if (tempDiv.parentNode) {
+          document.body.removeChild(tempDiv);
+        }
+      }
+    } catch (error) {
+      console.error('PDF export error:', error);
+      alert('匯出 PDF 時發生錯誤，請稍後再試。');
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto p-6 md:p-8 space-y-8">
       {/* Header */}
@@ -505,6 +1247,24 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
             <h1 className="text-3xl font-bold text-slate-800 tracking-tight">報表分析 Reports</h1>
           </div>
           <p className="text-slate-500 mt-1">查看月報表、季報表與年度報表</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExportPDF}
+            disabled={isExportingPDF}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+          >
+            <Download className="w-4 h-4" />
+            {isExportingPDF ? '匯出中...' : '匯出圖表 PDF'}
+          </button>
+          <button
+            onClick={handleExportExcel}
+            disabled={isExportingPDF}
+            className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+          >
+            <FileText className="w-4 h-4" />
+            匯出數據 Excel
+          </button>
         </div>
       </div>
 
@@ -654,17 +1414,36 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
 
       {/* Customer Revenue Distribution Pie Chart & Daily Trend (Month Report) */}
       {reportType === 'month' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* 1. Customer Pie Chart */}
-          {customerRevenueDistribution && customerRevenueDistribution.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
-              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <PieChart className="w-5 h-5 text-brand-500" />
-                客戶營收占比 ({selectedMonth})
-              </h3>
+        <div className="space-y-6">
+          {/* Customer Filter for Month Report */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-slate-600 font-medium whitespace-nowrap">篩選客戶:</label>
+              <select
+                value={selectedCustomerForChart}
+                onChange={(e) => setSelectedCustomerForChart(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 min-w-[180px]"
+              >
+                <option value="">全部客戶</option>
+                {availableCustomersForChart && availableCustomersForChart.map(customerName => (
+                  <option key={customerName} value={customerName}>{customerName}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 1. Customer Pie Chart */}
+            {customerRevenueDistribution && customerRevenueDistribution.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <PieChart className="w-5 h-5 text-brand-500" />
+                  {selectedCustomerForChart ? `${selectedCustomerForChart} - 客戶營收占比` : `客戶營收占比`} ({selectedMonth})
+                </h3>
               <div className="flex-1 min-h-[300px] flex flex-col">
                 <div className="h-64 mb-6">
                   <Pie
+                    ref={customerChartRef}
                     data={{
                       labels: customerRevenueDistribution.map(c => c.name),
                       datasets: [
@@ -732,10 +1511,11 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
               <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
                 <BarChart3 className="w-5 h-5 text-blue-500" />
-                每日營收走勢 ({selectedMonth})
+                {selectedCustomerForChart ? `${selectedCustomerForChart} - 每日營收走勢` : `每日營收走勢`} ({selectedMonth})
               </h3>
               <div className="flex-1 min-h-[300px] flex items-center justify-center">
                 <Bar
+                  ref={dailyChartRef}
                   data={{
                     labels: dailyBreakdown.map(d => `${d.day}日`),
                     datasets: [
@@ -811,7 +1591,13 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
                 <div>
                   <p className="text-xs text-slate-500 mb-1">日均營收</p>
                   <p className="text-sm font-bold text-slate-800">
-                    {formatCurrency(totalRevenue / new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate())}
+                    {(() => {
+                      const daysInMonth = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]), 0).getDate();
+                      const revenueToCalculate = selectedCustomerForChart 
+                        ? filteredInvoices.filter(inv => inv.customerName === selectedCustomerForChart).reduce((sum, inv) => sum + inv.totalAmount, 0)
+                        : totalRevenue;
+                      return formatCurrency(revenueToCalculate / daysInMonth);
+                    })()}
                   </p>
                 </div>
                 <div>
@@ -823,6 +1609,193 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
               </div>
             </div>
           )}
+
+          {/* 3. Service Client Distribution (僅當選擇康士藤客戶時顯示) */}
+          {serviceClientDistribution && serviceClientDistribution.distribution.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col lg:col-span-2">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-purple-500" />
+                {serviceClientDistribution.customerName} - 服務客戶營收占比 ({serviceClientDistribution.timeLabel})
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* 圓餅圖 */}
+                <div className="flex-1 min-h-[300px] flex flex-col">
+                  <div className="h-64 mb-6">
+                    <Pie
+                      ref={serviceClientChartRef}
+                      data={{
+                        labels: serviceClientDistribution.distribution.map(sc => sc.name),
+                        datasets: [
+                          {
+                            data: serviceClientDistribution.distribution.map(sc => sc.revenue),
+                            backgroundColor: [
+                              'rgba(168, 85, 247, 0.8)',
+                              'rgba(168, 85, 247, 0.6)',
+                              'rgba(168, 85, 247, 0.4)',
+                              'rgba(168, 85, 247, 0.2)',
+                              'rgba(168, 85, 247, 0.1)',
+                              'rgba(139, 92, 246, 0.8)',
+                              'rgba(139, 92, 246, 0.6)',
+                              'rgba(139, 92, 246, 0.4)',
+                            ],
+                            borderColor: '#ffffff',
+                            borderWidth: 2,
+                          },
+                        ],
+                      }}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: { display: false },
+                          tooltip: {
+                            callbacks: {
+                              label: (context) => {
+                                const serviceClient = serviceClientDistribution.distribution[context.dataIndex];
+                                return `${serviceClient.name}: ${formatCurrency(serviceClient.revenue)} (${serviceClient.percentage.toFixed(1)}%)`;
+                              },
+                            },
+                          },
+                        },
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                {/* 服務客戶列表 */}
+                <div className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2 custom-scrollbar">
+                  <div className="mb-4 p-3 bg-purple-50 rounded-lg border border-purple-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-purple-700">{serviceClientDistribution.customerName} 總營收</span>
+                      <span className="text-lg font-bold text-purple-800">{formatCurrency(serviceClientDistribution.totalRevenue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-purple-600">單據數量</span>
+                      <span className="text-sm font-semibold text-purple-700">{serviceClientDistribution.totalInvoices} 筆</span>
+                    </div>
+                  </div>
+                  {serviceClientDistribution.distribution.map((serviceClient, index) => (
+                    <div key={serviceClient.name} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100/50 hover:bg-purple-50/50 transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div 
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: index < 8 
+                              ? ['rgba(168, 85, 247, 0.8)', 'rgba(168, 85, 247, 0.6)', 'rgba(168, 85, 247, 0.4)', 'rgba(168, 85, 247, 0.2)', 'rgba(168, 85, 247, 0.1)', 'rgba(139, 92, 246, 0.8)', 'rgba(139, 92, 246, 0.6)', 'rgba(139, 92, 246, 0.4)'][index]
+                              : 'rgba(139, 92, 246, 0.4)'
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-slate-700 block truncate">{serviceClient.name}</span>
+                          <span className="text-xs text-slate-500">{serviceClient.count} 筆單據</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 flex-shrink-0 ml-2">
+                        <div className="text-right">
+                          <div className="text-sm text-slate-600 font-mono">{formatCurrency(serviceClient.revenue)}</div>
+                          <div className="text-xs text-purple-600 font-semibold">{serviceClient.percentage.toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 4. Contact Person Distribution (僅當選擇康士藤客戶時顯示) */}
+          {contactPersonDistribution && contactPersonDistribution.distribution.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col lg:col-span-2">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-green-500" />
+                {contactPersonDistribution.customerName} - 下單人員營收占比 ({contactPersonDistribution.timeLabel})
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* 圓餅圖 */}
+                <div className="flex-1 min-h-[300px] flex flex-col">
+                  <div className="h-64 mb-6">
+                    <Pie
+                      ref={contactPersonChartRef}
+                      data={{
+                        labels: contactPersonDistribution.distribution.map(cp => cp.name),
+                        datasets: [
+                          {
+                            data: contactPersonDistribution.distribution.map(cp => cp.revenue),
+                            backgroundColor: [
+                              'rgba(34, 197, 94, 0.8)',
+                              'rgba(34, 197, 94, 0.6)',
+                              'rgba(34, 197, 94, 0.4)',
+                              'rgba(34, 197, 94, 0.2)',
+                              'rgba(34, 197, 94, 0.1)',
+                              'rgba(22, 163, 74, 0.8)',
+                              'rgba(22, 163, 74, 0.6)',
+                              'rgba(22, 163, 74, 0.4)',
+                            ],
+                            borderColor: '#ffffff',
+                            borderWidth: 2,
+                          },
+                        ],
+                      }}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: { display: false },
+                          tooltip: {
+                            callbacks: {
+                              label: (context) => {
+                                const contactPerson = contactPersonDistribution.distribution[context.dataIndex];
+                                return `${contactPerson.name}: ${formatCurrency(contactPerson.revenue)} (${contactPerson.percentage.toFixed(1)}%)`;
+                              },
+                            },
+                          },
+                        },
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                {/* 下單人員列表 */}
+                <div className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2 custom-scrollbar">
+                  <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-green-700">{contactPersonDistribution.customerName} 總營收</span>
+                      <span className="text-lg font-bold text-green-800">{formatCurrency(contactPersonDistribution.totalRevenue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-green-600">單據數量</span>
+                      <span className="text-sm font-semibold text-green-700">{contactPersonDistribution.totalInvoices} 筆</span>
+                    </div>
+                  </div>
+                  {contactPersonDistribution.distribution.map((contactPerson, index) => (
+                    <div key={contactPerson.name} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100/50 hover:bg-green-50/50 transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div 
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: index < 8 
+                              ? ['rgba(34, 197, 94, 0.8)', 'rgba(34, 197, 94, 0.6)', 'rgba(34, 197, 94, 0.4)', 'rgba(34, 197, 94, 0.2)', 'rgba(34, 197, 94, 0.1)', 'rgba(22, 163, 74, 0.8)', 'rgba(22, 163, 74, 0.6)', 'rgba(22, 163, 74, 0.4)'][index]
+                              : 'rgba(22, 163, 74, 0.4)'
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-slate-700 block truncate">{contactPerson.name}</span>
+                          <span className="text-xs text-slate-500">{contactPerson.count} 筆單據</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 flex-shrink-0 ml-2">
+                        <div className="text-right">
+                          <div className="text-sm text-slate-600 font-mono">{formatCurrency(contactPerson.revenue)}</div>
+                          <div className="text-xs text-green-600 font-semibold">{contactPerson.percentage.toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          </div>
         </div>
       )}
 
@@ -851,6 +1824,7 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
           </div>
           <div className="h-64">
             <Line
+              ref={monthlyTrendChartRef}
               data={{
                 labels: (monthlyBreakdown || previousYearMonthlyBreakdown || []).map(m => {
                   const [year, month] = m.month.split('-');
@@ -1017,6 +1991,7 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
           </h3>
           <div className="h-64">
             <Bar
+              ref={quarterlyChartRef}
               data={{
                 labels: quarterlyBreakdown.map(q => q.quarter),
                 datasets: [
@@ -1080,6 +2055,195 @@ const Reports: React.FC<ReportsProps> = ({ invoices, companySettings, revenueTar
               }}
             />
           </div>
+        </div>
+      )}
+
+      {/* Service Client & Contact Person Distribution (季報表/年報表 - 僅當選擇康士藤客戶時顯示) */}
+      {(reportType === 'quarter' || reportType === 'year') && (
+        <div className="space-y-6">
+          {/* Service Client Distribution */}
+          {serviceClientDistribution && serviceClientDistribution.distribution.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-purple-500" />
+                {serviceClientDistribution.customerName} - 服務客戶營收占比 ({serviceClientDistribution.timeLabel})
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* 圓餅圖 */}
+                <div className="flex-1 min-h-[300px] flex flex-col">
+                  <div className="h-64 mb-6">
+                    <Pie
+                      data={{
+                        labels: serviceClientDistribution.distribution.map(sc => sc.name),
+                        datasets: [
+                          {
+                            data: serviceClientDistribution.distribution.map(sc => sc.revenue),
+                            backgroundColor: [
+                              'rgba(168, 85, 247, 0.8)',
+                              'rgba(168, 85, 247, 0.6)',
+                              'rgba(168, 85, 247, 0.4)',
+                              'rgba(168, 85, 247, 0.2)',
+                              'rgba(168, 85, 247, 0.1)',
+                              'rgba(139, 92, 246, 0.8)',
+                              'rgba(139, 92, 246, 0.6)',
+                              'rgba(139, 92, 246, 0.4)',
+                            ],
+                            borderColor: '#ffffff',
+                            borderWidth: 2,
+                          },
+                        ],
+                      }}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: { display: false },
+                          tooltip: {
+                            callbacks: {
+                              label: (context) => {
+                                const serviceClient = serviceClientDistribution.distribution[context.dataIndex];
+                                return `${serviceClient.name}: ${formatCurrency(serviceClient.revenue)} (${serviceClient.percentage.toFixed(1)}%)`;
+                              },
+                            },
+                          },
+                        },
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                {/* 服務客戶列表 */}
+                <div className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2 custom-scrollbar">
+                  <div className="mb-4 p-3 bg-purple-50 rounded-lg border border-purple-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-purple-700">{serviceClientDistribution.customerName} 總營收</span>
+                      <span className="text-lg font-bold text-purple-800">{formatCurrency(serviceClientDistribution.totalRevenue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-purple-600">單據數量</span>
+                      <span className="text-sm font-semibold text-purple-700">{serviceClientDistribution.totalInvoices} 筆</span>
+                    </div>
+                  </div>
+                  {serviceClientDistribution.distribution.map((serviceClient, index) => (
+                    <div key={serviceClient.name} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100/50 hover:bg-purple-50/50 transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div 
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: index < 8 
+                              ? ['rgba(168, 85, 247, 0.8)', 'rgba(168, 85, 247, 0.6)', 'rgba(168, 85, 247, 0.4)', 'rgba(168, 85, 247, 0.2)', 'rgba(168, 85, 247, 0.1)', 'rgba(139, 92, 246, 0.8)', 'rgba(139, 92, 246, 0.6)', 'rgba(139, 92, 246, 0.4)'][index]
+                              : 'rgba(139, 92, 246, 0.4)'
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-slate-700 block truncate">{serviceClient.name}</span>
+                          <span className="text-xs text-slate-500">{serviceClient.count} 筆單據</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 flex-shrink-0 ml-2">
+                        <div className="text-right">
+                          <div className="text-sm text-slate-600 font-mono">{formatCurrency(serviceClient.revenue)}</div>
+                          <div className="text-xs text-purple-600 font-semibold">{serviceClient.percentage.toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Contact Person Distribution */}
+          {contactPersonDistribution && contactPersonDistribution.distribution.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <PieChart className="w-5 h-5 text-green-500" />
+                {contactPersonDistribution.customerName} - 下單人員營收占比 ({contactPersonDistribution.timeLabel})
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* 圓餅圖 */}
+                <div className="flex-1 min-h-[300px] flex flex-col">
+                  <div className="h-64 mb-6">
+                    <Pie
+                      data={{
+                        labels: contactPersonDistribution.distribution.map(cp => cp.name),
+                        datasets: [
+                          {
+                            data: contactPersonDistribution.distribution.map(cp => cp.revenue),
+                            backgroundColor: [
+                              'rgba(34, 197, 94, 0.8)',
+                              'rgba(34, 197, 94, 0.6)',
+                              'rgba(34, 197, 94, 0.4)',
+                              'rgba(34, 197, 94, 0.2)',
+                              'rgba(34, 197, 94, 0.1)',
+                              'rgba(22, 163, 74, 0.8)',
+                              'rgba(22, 163, 74, 0.6)',
+                              'rgba(22, 163, 74, 0.4)',
+                            ],
+                            borderColor: '#ffffff',
+                            borderWidth: 2,
+                          },
+                        ],
+                      }}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: { display: false },
+                          tooltip: {
+                            callbacks: {
+                              label: (context) => {
+                                const contactPerson = contactPersonDistribution.distribution[context.dataIndex];
+                                return `${contactPerson.name}: ${formatCurrency(contactPerson.revenue)} (${contactPerson.percentage.toFixed(1)}%)`;
+                              },
+                            },
+                          },
+                        },
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                {/* 下單人員列表 */}
+                <div className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2 custom-scrollbar">
+                  <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-green-700">{contactPersonDistribution.customerName} 總營收</span>
+                      <span className="text-lg font-bold text-green-800">{formatCurrency(contactPersonDistribution.totalRevenue)}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-xs text-green-600">單據數量</span>
+                      <span className="text-sm font-semibold text-green-700">{contactPersonDistribution.totalInvoices} 筆</span>
+                    </div>
+                  </div>
+                  {contactPersonDistribution.distribution.map((contactPerson, index) => (
+                    <div key={contactPerson.name} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100/50 hover:bg-green-50/50 transition-colors">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div 
+                          className="w-4 h-4 rounded-full flex-shrink-0"
+                          style={{
+                            backgroundColor: index < 8 
+                              ? ['rgba(34, 197, 94, 0.8)', 'rgba(34, 197, 94, 0.6)', 'rgba(34, 197, 94, 0.4)', 'rgba(34, 197, 94, 0.2)', 'rgba(34, 197, 94, 0.1)', 'rgba(22, 163, 74, 0.8)', 'rgba(22, 163, 74, 0.6)', 'rgba(22, 163, 74, 0.4)'][index]
+                              : 'rgba(22, 163, 74, 0.4)'
+                          }}
+                        ></div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-medium text-slate-700 block truncate">{contactPerson.name}</span>
+                          <span className="text-xs text-slate-500">{contactPerson.count} 筆單據</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 flex-shrink-0 ml-2">
+                        <div className="text-right">
+                          <div className="text-sm text-slate-600 font-mono">{formatCurrency(contactPerson.revenue)}</div>
+                          <div className="text-xs text-green-600 font-semibold">{contactPerson.percentage.toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
