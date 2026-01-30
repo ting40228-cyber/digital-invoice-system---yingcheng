@@ -196,6 +196,12 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
            const price = field === 'unitPrice' ? Number(value) : item.unitPrice;
            updatedItem.amount = qty * price;
         }
+
+        // When amount is manually changed, use the keyed value (allow manual override)
+        if (field === 'amount') {
+           const num = typeof value === 'number' ? value : (parseFloat(String(value)) || 0);
+           updatedItem.amount = num;
+        }
         return updatedItem;
       }
       return item;
@@ -1077,8 +1083,17 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                       <div className="p-2 text-right font-mono">{formatCurrency(item.unitPrice).replace('NT$', '')}</div>
                     )}
                   </td>
-                  <td className="p-2 text-right font-medium font-mono border-r border-slate-100 text-slate-700">
-                    {formatCurrency(item.amount).replace('NT$', '')}
+                  <td className="p-0 border-r border-slate-100">
+                    {isEditing ? (
+                      <input 
+                        type="number"
+                        className="w-full h-10 px-1 outline-none text-right bg-transparent focus:bg-brand-50 font-mono font-medium text-slate-700"
+                        value={item.amount}
+                        onChange={(e) => handleItemChange(item.id, 'amount', e.target.value)}
+                      />
+                    ) : (
+                      <div className="p-2 text-right font-medium font-mono text-slate-700">{formatCurrency(item.amount).replace('NT$', '')}</div>
+                    )}
                   </td>
                   <td className="p-0">
                     {isEditing ? (
