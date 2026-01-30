@@ -75,8 +75,6 @@ const Settings: React.FC<SettingsProps> = ({
     setExpandedCustomers(newExpanded);
   };
   
-  // State for new person input per customer (stored in a map by customer ID)
-  const [newPersonInputs, setNewPersonInputs] = useState<Record<string, string>>({});
   // State for new size option input per product (stored in a map by product ID)
   const [newSizeOptionInputs, setNewSizeOptionInputs] = useState<Record<string, string>>({});
   
@@ -992,57 +990,32 @@ const Settings: React.FC<SettingsProps> = ({
                           <div className="border-t border-slate-200 pt-4">
                             <label className="block text-xs font-medium text-slate-600 mb-2 flex items-center">
                               <Users className="w-4 h-4 mr-1" />
-                              下單人員 ({c.contactPersons.length})
+                              下單人員歷史記錄 ({c.contactPersons.length})
                             </label>
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3">
+                              <p className="text-xs text-slate-600 mb-2">
+                                <strong>說明：</strong>下單人員現在可以直接在對帳單中輸入，系統會自動儲存。此處僅顯示歷史記錄，供參考使用。
+                              </p>
+                            </div>
                             <div className="flex flex-wrap gap-2 mb-3">
                               {c.contactPersons.map((person, index) => (
                                 <span 
                                   key={index}
-                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-brand-50 text-brand-700 rounded-full text-sm border border-brand-200"
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-full text-sm border border-slate-200"
                                 >
                                   {person}
                                   <button
                                     onClick={() => removeContactPerson(c.id, index)}
-                                    className="text-brand-600 hover:text-red-600 ml-1"
+                                    className="text-slate-500 hover:text-red-600 ml-1"
+                                    title="刪除此歷史記錄"
                                   >
                                     <X className="w-3 h-3" />
                                   </button>
                                 </span>
                               ))}
                               {c.contactPersons.length === 0 && (
-                                <span className="text-sm text-slate-400 italic">尚未新增下單人員</span>
+                                <span className="text-sm text-slate-400 italic">尚無下單人員歷史記錄</span>
                               )}
-                            </div>
-                            <div className="flex gap-2">
-                              <input 
-                                type="text"
-                                value={newPersonInputs[c.id] || ''}
-                                onChange={(e) => setNewPersonInputs({ ...newPersonInputs, [c.id]: e.target.value })}
-                                onKeyPress={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    const inputValue = newPersonInputs[c.id] || '';
-                                    if (inputValue.trim()) {
-                                      addContactPerson(c.id, inputValue);
-                                      setNewPersonInputs({ ...newPersonInputs, [c.id]: '' });
-                                    }
-                                  }
-                                }}
-                                className="flex-1 p-2 border border-slate-200 rounded focus:border-brand-500 text-sm"
-                                placeholder="輸入下單人員姓名後按 Enter 或點擊新增"
-                              />
-                              <button
-                                onClick={() => {
-                                  const inputValue = newPersonInputs[c.id] || '';
-                                  if (inputValue.trim()) {
-                                    addContactPerson(c.id, inputValue);
-                                    setNewPersonInputs({ ...newPersonInputs, [c.id]: '' });
-                                  }
-                                }}
-                                className="px-4 py-2 bg-brand-600 text-white rounded hover:bg-brand-700 text-sm font-medium flex items-center"
-                              >
-                                <Plus className="w-4 h-4 mr-1" /> 新增
-                              </button>
                             </div>
                           </div>
                         </div>

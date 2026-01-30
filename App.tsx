@@ -213,12 +213,15 @@ const App: React.FC = () => {
 
   // --- Invoice Logic ---
 
-  // Handle Sign Link Routing
+  // Handle URL Routing (Sign Link & Preview)
   useEffect(() => {
       if (isLoading) return;
       const params = new URLSearchParams(window.location.search);
       const signId = params.get('sign');
+      const viewParam = params.get('view');
 
+
+      // Handle sign link
       if (signId) {
           const targetInvoice = invoices.find(i => i.id === signId);
           if (targetInvoice) {
@@ -241,6 +244,21 @@ const App: React.FC = () => {
           }
       }
   }, [invoices, isLoading, view, user]);
+
+  // Handle view changes and update URL
+  useEffect(() => {
+      if (view !== 'sign-only' && view !== 'login') {
+          // Clear view param for other views
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('view') === 'preview') {
+              params.delete('view');
+              const newUrl = params.toString() 
+                  ? `${window.location.pathname}?${params.toString()}`
+                  : window.location.pathname;
+              window.history.replaceState({}, '', newUrl);
+          }
+      }
+  }, [view]);
 
   // Sync currentInvoice with latest data
   useEffect(() => {
@@ -356,6 +374,35 @@ const App: React.FC = () => {
       }
   };
 
+  // Batch sign multiple invoices
+  const handleBatchSign = async (invoiceIds: string[], signatureBase64: string) => {
+      if (invoiceIds.length === 0) return;
+
+      try {
+          const invoicesToSign = invoices.filter(inv => invoiceIds.includes(inv.id) && inv.status !== 'completed');
+          
+          if (invoicesToSign.length === 0) {
+              toast.warning('所選單據皆已完成簽收');
+              return;
+          }
+
+          // Update all invoices with signature
+          const updatePromises = invoicesToSign.map(inv => {
+              const completedInvoice: Invoice = {
+                  ...inv,
+                  signatureBase64,
+                  status: 'completed'
+              };
+              return saveInvoice(completedInvoice);
+          });
+
+          await Promise.all(updatePromises);
+          toast.success(`已成功簽收 ${invoicesToSign.length} 筆單據`);
+      } catch (error) {
+          handleFirestoreError(error, '批量簽收對帳單');
+      }
+  };
+
   const handleUpdateCurrentInvoice = (updated: Invoice) => {
     setCurrentInvoice(updated);
   };
@@ -391,6 +438,7 @@ const App: React.FC = () => {
   if (view === 'login') {
       return <Login onLogin={handleLogin} adminSettings={adminSettings} />;
   }
+
 
   // Remote Signing View
   if (view === 'sign-only' && currentInvoice) {
@@ -513,6 +561,7 @@ const App: React.FC = () => {
               companySettings={companySettings}
               revenueTargets={revenueTargets}
               customers={customers}
+              onBatchSign={handleBatchSign}
             />
           </div>
         )}

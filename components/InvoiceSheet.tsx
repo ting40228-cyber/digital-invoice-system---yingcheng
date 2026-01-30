@@ -63,6 +63,18 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
     return Array.from(history).sort();
   }, [invoices, localInvoice.customerName, isKangshitingTemplate]);
 
+  // Get contact person history from invoices (similar to service client)
+  const contactPersonHistory = useMemo(() => {
+    if (!localInvoice.customerName) return [];
+    const history = new Set<string>();
+    invoices
+      .filter(inv => inv.customerName === localInvoice.customerName && inv.contactPerson)
+      .forEach(inv => {
+        if (inv.contactPerson) history.add(inv.contactPerson);
+      });
+    return Array.from(history).sort();
+  }, [invoices, localInvoice.customerName]);
+
 
   // Sync local state when props change
   useEffect(() => {
@@ -862,10 +874,10 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                               placeholder="選擇或輸入下單人員"
                               autoComplete="off"
                           />
-                          {/* Custom Dropdown for Contact Person */}
-                          {localInvoice.customerName && customerMap?.has(localInvoice.customerName) && (
+                          {/* Custom Dropdown for Contact Person - Show history from invoices */}
+                          {contactPersonHistory.length > 0 && (
                               <div className="hidden group-focus-within:block absolute top-full left-0 w-full z-50 bg-white border border-slate-200 shadow-lg max-h-48 overflow-y-auto rounded-b-md">
-                                {customerMap.get(localInvoice.customerName)?.contactPersons
+                                {contactPersonHistory
                                   .filter(p => !localInvoice.contactPerson || p.toLowerCase().includes((localInvoice.contactPerson || '').toLowerCase()))
                                   .map((person, i) => (
                                       <div 
@@ -879,10 +891,9 @@ const InvoiceSheet: React.FC<InvoiceSheetProps> = ({
                                         {person}
                                       </div>
                                   ))}
-                                  {customerMap.get(localInvoice.customerName)?.contactPersons
-                                    .filter(p => !localInvoice.contactPerson || p.toLowerCase().includes((localInvoice.contactPerson || '').toLowerCase())).length === 0 && (
-                                      <div className="px-3 py-2 text-xs text-slate-400 italic">無相符人員</div>
-                                    )}
+                                  {contactPersonHistory.filter(p => !localInvoice.contactPerson || p.toLowerCase().includes((localInvoice.contactPerson || '').toLowerCase())).length === 0 && (
+                                    <div className="px-3 py-2 text-xs text-slate-400 italic">無相符人員</div>
+                                  )}
                               </div>
                           )}
                       </div>

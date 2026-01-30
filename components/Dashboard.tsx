@@ -5,7 +5,8 @@ import {
   formatCurrency
 } from '../utils/helpers';
 import InvoiceSheet from './InvoiceSheet'; // Import for Batch Rendering
-import { FileText, PlusCircle, Search, ChevronRight, CheckCircle, Clock, Download, Filter, CheckSquare, Square } from 'lucide-react';
+import SignatureCanvas from './SignatureCanvas';
+import { FileText, PlusCircle, Search, ChevronRight, CheckCircle, Clock, Download, Filter, CheckSquare, Square, PenTool, X } from 'lucide-react';
 
 
 interface DashboardProps {
@@ -15,9 +16,10 @@ interface DashboardProps {
   companySettings?: CompanySettings;
   revenueTargets?: RevenueTarget[];
   customers?: Customer[]; // Add customers prop for customer ID lookup
+  onBatchSign?: (invoiceIds: string[], signatureBase64: string) => void; // Batch sign handler
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectInvoice, companySettings, revenueTargets = [], customers = [] }) => {
+const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectInvoice, companySettings, revenueTargets = [], customers = [], onBatchSign }) => {
   const [selectedMonth, setSelectedMonth] = useState<string>(getLocalMonthKey(new Date().toISOString().split('T')[0]));
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
@@ -26,6 +28,10 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<Set<string>>(new Set());
   const [isExportingBatch, setIsExportingBatch] = useState(false);
   const printContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Batch Sign State
+  const [isBatchSignMode, setIsBatchSignMode] = useState(false);
+  const [batchSignature, setBatchSignature] = useState<string | null>(null);
 
   // Get available months for filtering
   const availableMonths = useMemo(() => {
@@ -389,6 +395,32 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
       return invoices.filter(inv => selectedInvoiceIds.has(inv.id));
   }, [invoices, selectedInvoiceIds]);
 
+  // Get pending invoices (not yet signed) from selected
+  const pendingInvoicesToSign = useMemo(() => {
+      return invoices.filter(inv => selectedInvoiceIds.has(inv.id) && inv.status !== 'completed');
+  }, [invoices, selectedInvoiceIds]);
+
+  // Handle batch sign
+  const handleBatchSignConfirm = () => {
+      if (!batchSignature || !onBatchSign) {
+          alert('請先簽名');
+          return;
+      }
+      
+      if (pendingInvoicesToSign.length === 0) {
+          alert('所選單據皆已完成簽收');
+          return;
+      }
+
+      const invoiceIds = pendingInvoicesToSign.map(inv => inv.id);
+      onBatchSign(invoiceIds, batchSignature);
+      
+      // Reset state
+      setIsBatchSignMode(false);
+      setBatchSignature(null);
+      setSelectedInvoiceIds(new Set());
+  };
+
 
   // Enhanced Excel Export - Supports Month, Quarter, and Year reports
   const executeExcelExport = (targetInvoices: Invoice[], filename: string, customerName?: string) => {
@@ -596,18 +628,28 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
           <p className="text-slate-500 mt-1">管理您的客戶對帳單與營收概況</p>
         </div>
         <div className="flex flex-wrap gap-3 w-full md:w-auto">
-            {selectedInvoiceIds.size > 0 && (
-                <button 
-                    onClick={handleBatchPdfExport}
-                    disabled={isExportingBatch}
-                    className="flex-1 md:flex-none bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center justify-center shadow-lg animate-fadeIn"
-                >
-                    {isExportingBatch ? (
-                        <span className="flex items-center"><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"></span>處理中...</span>
-                    ) : (
-                        <span className="flex items-center"><Download className="w-4 h-4 mr-2" /> 下載合併 PDF ({selectedInvoiceIds.size})</span>
+            {selectedInvoiceIds.size > 0 && !isBatchSignMode && (
+                <>
+                    <button 
+                        onClick={handleBatchPdfExport}
+                        disabled={isExportingBatch}
+                        className="flex-1 md:flex-none bg-slate-800 text-white px-5 py-2.5 rounded-lg flex items-center justify-center shadow-lg animate-fadeIn"
+                    >
+                        {isExportingBatch ? (
+                            <span className="flex items-center"><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2"></span>處理中...</span>
+                        ) : (
+                            <span className="flex items-center"><Download className="w-4 h-4 mr-2" /> 下載合併 PDF ({selectedInvoiceIds.size})</span>
+                        )}
+                    </button>
+                    {onBatchSign && pendingInvoicesToSign.length > 0 && (
+                        <button 
+                            onClick={() => setIsBatchSignMode(true)}
+                            className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg flex items-center justify-center shadow-lg animate-fadeIn"
+                        >
+                            <PenTool className="w-4 h-4 mr-2" /> 批量簽收 ({pendingInvoicesToSign.length})
+                        </button>
                     )}
-                </button>
+                </>
             )}
             <button 
                 onClick={onCreateNew}
@@ -618,6 +660,73 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                 </button>
         </div>
       </div>
+
+      {/* Batch Sign Modal */}
+      {isBatchSignMode && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 animate-fadeIn">
+                  <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-bold text-slate-800">批量簽收</h2>
+                      <button 
+                          onClick={() => {
+                              setIsBatchSignMode(false);
+                              setBatchSignature(null);
+                          }}
+                          className="text-slate-400 hover:text-slate-600"
+                      >
+                          <X className="w-5 h-5" />
+                      </button>
+                  </div>
+                  
+                  <div className="mb-4">
+                      <p className="text-sm text-slate-600 mb-2">
+                          將為以下 <span className="font-bold text-emerald-600">{pendingInvoicesToSign.length}</span> 筆待簽收單據進行批量簽收：
+                      </p>
+                      <div className="bg-slate-50 rounded-lg p-3 max-h-32 overflow-y-auto">
+                          <ul className="text-sm text-slate-700 space-y-1">
+                              {pendingInvoicesToSign.map(inv => (
+                                  <li key={inv.id} className="flex items-center gap-2">
+                                      <span className="font-mono text-xs">{inv.serialNumber}</span>
+                                      <span>-</span>
+                                      <span>{inv.customerName}</span>
+                                  </li>
+                              ))}
+                          </ul>
+                      </div>
+                  </div>
+
+                  <div className="mb-4">
+                      <label className="block text-sm font-medium text-slate-700 mb-2">請在下方簽名：</label>
+                      <div className="border-2 border-brand-400 border-dashed rounded-xl p-4 bg-brand-50/50">
+                          <SignatureCanvas 
+                              readOnly={false}
+                              onChange={(base64) => setBatchSignature(base64)}
+                          />
+                      </div>
+                  </div>
+
+                  <div className="flex gap-3 justify-end">
+                      <button 
+                          onClick={() => {
+                              setIsBatchSignMode(false);
+                              setBatchSignature(null);
+                          }}
+                          className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                      >
+                          取消
+                      </button>
+                      <button 
+                          onClick={handleBatchSignConfirm}
+                          disabled={!batchSignature}
+                          className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                      >
+                          <CheckCircle className="w-4 h-4" />
+                          確認簽收 ({pendingInvoicesToSign.length} 筆)
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       {/* Hidden Print Container for Batch Export */}
       <div className="absolute top-0 left-0 w-0 h-0 overflow-hidden opacity-0 pointer-events-none">
@@ -734,6 +843,8 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                                                     <th className="px-4 py-3 w-10"></th>
                                                     <th className="px-4 py-3 text-left font-medium w-28">單號</th>
                                                     <th className="px-4 py-3 text-left font-medium w-28">日期</th>
+                                                    <th className="px-4 py-3 text-left font-medium w-24">下單人員</th>
+                                                    <th className="px-4 py-3 text-left font-medium w-24">服務客戶</th>
                                                     {searchTerm && <th className="px-4 py-3 text-left font-medium flex-1">備註/說明</th>}
                                                     <th className="px-4 py-3 text-right font-medium w-24">金額</th>
                                                     <th className="px-4 py-3 text-center font-medium w-24">狀態</th>
@@ -795,6 +906,8 @@ const Dashboard: React.FC<DashboardProps> = ({ invoices, onCreateNew, onSelectIn
                                                         </td>
                                                         <td className="px-4 py-3 font-mono text-slate-600 font-medium text-xs sm:text-sm">{highlightText(inv.serialNumber, searchTerm)}</td>
                                                         <td className="px-4 py-3 text-slate-500 text-xs sm:text-sm">{inv.date}</td>
+                                                        <td className="px-4 py-3 text-slate-600 text-xs sm:text-sm">{inv.contactPerson || '-'}</td>
+                                                        <td className="px-4 py-3 text-slate-600 text-xs sm:text-sm">{inv.serviceClient || '-'}</td>
                                                         {searchTerm && (
                                                           <td className="px-4 py-3 text-slate-600 text-xs sm:text-sm max-w-xs truncate">
                                                             {displayNote ? (
